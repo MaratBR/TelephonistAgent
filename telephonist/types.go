@@ -2,31 +2,58 @@ package telephonist
 
 import "time"
 
+type TicketResponse struct {
+	// Expiration time.Time `json:"exp"`  // ignore this, we don't use it anyway
+	Ticket string `json:"ticket"`
+}
+
+type DetailResponse struct {
+	Detail string `json:"detail"`
+}
+
+type IDResponse struct {
+	ID string `json:"_id"`
+}
+
+type CreateSequenceRequest struct {
+	RelatedTask string                 `json:"related_task"`
+	CustomName  *string                `json:"custom_name"`
+	Description *string                `json:"description"`
+	Meta        map[string]interface{} `json:"meta"`
+}
+
+type FinishSequenceRequest struct {
+	Error     string `json:"error_message"`
+	IsSkipped bool   `json:"is_skipped"`
+}
+
 type ErrorData struct {
 	ErrorType string `json:"error_type"`
 	Error     string `json:"error"`
 	Exception string `json:"exception"`
 }
 
-type EventData struct {
-	Name        string      `json:"name"`
+type Event struct {
+	ID          string      `json:"_id"`
+	AppID       string      `json:"app_id"`
+	CreatedAt   time.Time   `json:"created_at"`
+	EventKey    string      `json:"event_key"`
+	EventType   string      `json:"event_type"`
 	RelatedTask string      `json:"related_task"`
 	Data        interface{} `json:"data"`
+	PublisherIP string      `json:"publisher_id"`
+	SequenceID  string      `json:"sequence_id"`
+}
+
+type EventData struct {
+	Name       string      `json:"name"`
+	SequenceId *string     `json:"sequence_id"`
+	Data       interface{} `json:"data"`
 }
 
 type rawMessage struct {
 	MessageType string      `json:"msg_type"`
 	Data        interface{} `json:"data"`
-}
-
-type NewEventData struct {
-	EventType   string      `json:"event_type"`
-	SourceID    string      `json:"source_id"`
-	SourceIP    string      `json:"source_ip"`
-	RelatedTask string      `json:"related_task"`
-	SourceType  string      `json:"source_type"`
-	Data        interface{} `json:"data"`
-	CreatedAt   time.Time   `json:"created_at"`
 }
 
 type SendIf string
@@ -57,15 +84,16 @@ func DefaultSettings() SupervisorSettingsV1 {
 }
 
 type HelloMessage struct {
-	Subscriptions          []string    `json:"subscriptions"`
-	SettingsSchema         interface{} `json:"settings_schema"`
-	SupportedFeatures      []string    `json:"supported_features"`
-	Software               string      `json:"software"`
-	SoftwareVersion        string      `json:"software_version"`
-	OS                     string      `json:"os"`
-	PID                    int         `json:"pid"`
-	CompatibilityKey       string      `json:"compatibility_key"`
-	AssumedApplicationType string      `json:"assumed_application_type"`
+	Subscriptions          []string `json:"subscriptions"`
+	SupportedFeatures      []string `json:"supported_features"`
+	ClientName             string   `json:"client_name"`
+	ClientVersion          string   `json:"client_version"`
+	OS                     string   `json:"os"`
+	PID                    int      `json:"pid"`
+	CompatibilityKey       string   `json:"compatibility_key"`
+	AssumedApplicationType string   `json:"assumed_application_type"`
+	InstanceID             string   `json:"instance_id"`
+	MachineID              string   `json:"machine_id"`
 }
 
 type IntroductionData struct {

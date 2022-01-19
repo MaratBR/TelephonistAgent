@@ -8,13 +8,14 @@ import (
 	"net/url"
 	"os"
 	"path"
-	"runtime"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
+	log "github.com/inconshreveable/log15"
 	"github.com/parnurzeal/gorequest"
-	log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -58,13 +59,30 @@ type ClientOptions struct {
 	APIKey                 string
 	URL                    *url.URL
 	Timeout                time.Duration
-	Logger                 *log.Logger
+	Logger                 log.Logger
 	ConnectionRetryTimeout time.Duration
 	CompatibilityKey       string
+	InstanceID             string
+	MachineID              string
+	OnNewEvent             OnEventCallback
+	OnPersistState         OnPersistStateCallback
 }
 
+type ClientPersistentState struct {
+	BoundSequences []string
+}
+
+func newPersistentState() *ClientPersistentState {
+	return &ClientPersistentState{
+		BoundSequences: []string{},
+	}
+}
+
+type OnPersistStateCallback func(state *ClientPersistentState) error
+type OnEventCallback func(event Event) error
+
 type Client struct {
-	log *log.Logger
+	log log.Logger
 
 	// rest api options
 	opts         ClientOptions
@@ -72,12 +90,14 @@ type Client struct {
 	conn         *websocket.Conn
 
 	// ws
-	isRunning    bool
-	closeChan    chan struct{}
-	sendMessages chan rawMessage
-	state        ClientState
-	ready        bool
-	userAgent    string
+	isRunning        bool
+	closeChan        chan struct{}
+	sendMessages     chan rawMessage
+	state            ClientState
+	persistentState  *ClientPersistentState
+	ready            bool
+	userAgent        string
+	boundSequenceIDs []string
 }
 
 func NewClient(options ClientOptions) (*Client, error) {
@@ -93,7 +113,7 @@ func NewClient(options ClientOptions) (*Client, error) {
 	if options.CompatibilityKey == "" {
 		options.CompatibilityKey = "golang-supervisor-compatibility-v1"
 	}
-	logger := log.StandardLogger()
+	logger := log.New(log.Ctx{"module": "telephonist/client"})
 	if options.Logger != nil {
 		logger = options.Logger
 	}
@@ -103,38 +123,105 @@ func NewClient(options ClientOptions) (*Client, error) {
 		log:          logger,
 		state:        StateDisconnected,
 		userAgent: fmt.Sprintf(
-			"application=golang_supervisor, version=%s, golang=%s, arch=%s, goos=%s",
-			VERSION, runtime.Version(), runtime.GOARCH, runtime.GOOS),
+			"Telephonist Supervisor (Golang) " + VERSION),
+		persistentState: newPersistentState(),
 	}, nil
 }
 
 //#region REST API
 
-func (c Client) req() *gorequest.SuperAgent {
-	return gorequest.New().
-		Timeout(c.opts.Timeout).
-		AppendHeader("authorizaton", "Bearer "+c.opts.APIKey)
+func (c Client) postJSON(relativeURL string, data interface{}, response interface{}) (gorequest.Response, CombinedError) {
+	req := gorequest.New().Post(c.getUrl(relativeURL)).Set("Authorization", "Bearer "+c.opts.APIKey)
+	if data != nil {
+		req = req.SendStruct(data)
+	}
+	var (
+		err  CombinedError
+		resp gorequest.Response
+	)
+	if response == nil {
+		resp, _, err = req.End()
+	} else {
+		resp, _, err = req.EndStruct(response)
+	}
+	if err == nil && resp.StatusCode > 299 {
+		return resp, CombinedError{HTTPError{Status: resp.StatusCode}}
+	}
+	return resp, err
 }
 
 func (c Client) getUrl(url string) string {
-	u := c.opts.URL
+	u := *c.opts.URL
 	u.Path = path.Join(u.Path, url)
 	return u.String()
 }
 
-func (c Client) Publish(event EventData) []error {
-	resp, _, errs := c.req().
-		Post(c.getUrl("events/publish")).
-		SendStruct(event).
-		End()
-	if errs != nil {
-		return errs
+func (c Client) Publish(event EventData) CombinedError {
+	resp, err := c.postJSON("events/publish", event, nil)
+	if err != nil {
+		return err
 	}
 	if resp.StatusCode != 200 {
 		return []error{fmt.Errorf("unexpected status code: {0}", resp.Status)}
 	}
-	log.Debugf("published event %s", event.Name)
+	log.Debug("published event", log.Ctx{"name": event.Name})
 	return nil
+}
+
+func (c Client) UpdateSequencMeta(sequenceID string, meta map[string]interface{}) CombinedError {
+	resp, err := c.postJSON("events/sequence/"+sequenceID+"/meta", meta, nil)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != 200 {
+		return []error{fmt.Errorf("unexpected status code: {0}", resp.Status)}
+	}
+	log.Debug("updated sequence meta", log.Ctx{"sequence_id": sequenceID, "meta": meta})
+	return nil
+}
+
+func (c Client) CreateSequence(data CreateSequenceRequest) (*IDResponse, CombinedError) {
+	resp := new(IDResponse)
+	_, err := c.postJSON("events/sequence", data, resp)
+	if err != nil {
+		return nil, err
+	}
+	log.Debug("create new sequence", log.Ctx{"sequence_id": resp.ID})
+	return resp, nil
+}
+
+func (c Client) FinishSequence(sequenceID string, body FinishSequenceRequest) (*DetailResponse, CombinedError) {
+	resp := new(DetailResponse)
+	_, _, errs := gorequest.New().
+		Post(c.getUrl("events/sequence/"+sequenceID+"/finish")).
+		SendStruct(body).
+		Set("Authorization", "Bearer "+c.opts.APIKey).
+		EndStruct(resp)
+	if errs != nil {
+		return nil, CombinedError(errs)
+	}
+	return resp, nil
+}
+
+func (c Client) issueWSTicket() (string, []error) {
+	req := gorequest.New()
+	resp, _, errs := req.
+		Post(c.getUrl("applications/issue-ws-ticket")).
+		Set("Authorization", "Bearer "+c.opts.APIKey).
+		End()
+	if errs != nil {
+		return "", errs
+	}
+	if resp.StatusCode != 200 {
+		return "", []error{fmt.Errorf("unexpected status code: {0}", resp.Status)}
+	}
+	decoder := json.NewDecoder(resp.Body)
+	var ticketBody TicketResponse
+	err := decoder.Decode(&ticketBody)
+	if err != nil {
+		return "", []error{fmt.Errorf("failed to decode backend response (WS ticket): %s", err.Error())}
+	}
+	return ticketBody.Ticket, nil
 }
 
 //#endregion
@@ -145,7 +232,7 @@ func (c Client) IsRunning() bool {
 	return c.isRunning
 }
 
-func (c *Client) Start() error {
+func (c *Client) Run() error {
 	c.runLoopMutex.Lock()
 	if c.isRunning {
 		c.runLoopMutex.Unlock()
@@ -153,8 +240,19 @@ func (c *Client) Start() error {
 	}
 	c.isRunning = true
 	c.runLoopMutex.Unlock()
-	go c.runWrapped()
-	return nil
+	ticket, errs := c.issueWSTicket()
+	if errs != nil {
+		if len(errs) == 1 {
+			return fmt.Errorf("failed to issue WS ticket: %s", errs[0].Error())
+		} else {
+			sb := strings.Builder{}
+			for index, err := range errs {
+				sb.WriteString("\n\t" + strconv.Itoa(index+1) + ") " + err.Error())
+			}
+			return fmt.Errorf("failed to issue WS ticket: %s", sb.String())
+		}
+	}
+	return c.runWithTicket(ticket)
 }
 
 func (c *Client) Stop() {
@@ -163,20 +261,9 @@ func (c *Client) Stop() {
 	}
 }
 
-func (c *Client) runWrapped() {
-	for c.isRunning {
-		err := c.run()
-		if err != nil {
-			log.Errorln(err)
-		}
-		log.Debugf("retrying in %s", c.opts.ConnectionRetryTimeout)
-		time.Sleep(c.opts.ConnectionRetryTimeout)
-	}
-}
-
 func (c *Client) requireState(expectedState ClientState) {
 	if c.state != expectedState {
-		log.Panicf("invalid client state encountered expected: %s, got: %s", c.state, expectedState)
+		c.log.Crit(fmt.Sprintf("invalid client state encountered expected: %s, got: %s", c.state, expectedState))
 	}
 }
 
@@ -189,7 +276,7 @@ func (c *Client) transitionState(expectedState, newState ClientState) {
 	c.setState(newState)
 }
 
-func (c *Client) run() error {
+func (c *Client) runWithTicket(ticket string) error {
 	c.transitionState(StateDisconnected, StateConnecting)
 	defer c.setState(StateDisconnected)
 
@@ -203,35 +290,46 @@ func (c *Client) run() error {
 		schema = "ws"
 	}
 	var err error
-	u := url.URL{Scheme: schema, Host: c.opts.URL.Host, Path: path.Join(c.opts.URL.Path, "applications/ws")}
-	log.Debugf("connecting to %s", u.String())
+	u := url.URL{
+		Scheme:   schema,
+		Host:     c.opts.URL.Host,
+		Path:     path.Join(c.opts.URL.Path, "applications/ws"),
+		RawQuery: "ticket=" + ticket,
+	}
+	log.Debug(fmt.Sprintf("connecting to %s", u.String()))
 
 	c.conn, _, err = websocket.DefaultDialer.Dial(u.String(), http.Header{
-		"Authorization": []string{"Bearer " + c.opts.APIKey},
-		"User-Agent":    []string{c.userAgent},
+		"User-Agent": []string{c.userAgent},
 	})
 	if err != nil {
 		return err
 	}
 	c.transitionState(StateConnecting, StatePreparing)
 	go c.readPump()
-	c.writePump()
+	go c.writePump()
+
+	<-c.closeChan
+
+	if c.opts.OnPersistState != nil {
+		c.opts.OnPersistState(c.persistentState)
+	}
+
 	return nil
 }
 
 func (c *Client) writePump() {
 	if !c.isRunning {
-		log.Panicln("cannot start writePump, client isn't running")
+		log.Crit("cannot start writePump, client isn't running")
 	}
 	t := time.NewTicker(pingPeriod)
-	log.Debugln("writePump: starting")
-	defer log.Debugln("writePump: exiting")
+	log.Debug("writePump: starting")
+	defer log.Debug("writePump: exiting")
 	for {
 		select {
 		case rm, ok := <-c.sendMessages:
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if !ok {
-				log.Debugln("sendMessages channel is closed, sending close message to the server")
+				log.Debug("sendMessages channel is closed, sending close message to the server")
 				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
@@ -246,7 +344,7 @@ func (c *Client) writePump() {
 			}
 			_, err = w.Write(mb)
 			if err != nil {
-				log.Errorf("failed to write to socket: %s", err.Error())
+				log.Error("failed to write to socket", log.Ctx{"error": err.Error()})
 			}
 			err = w.Close()
 		case <-t.C:
@@ -260,14 +358,14 @@ func (c *Client) writePump() {
 
 func (c *Client) readPump() {
 	if c.state != StatePreparing && c.state != StateReady {
-		log.Panicf("invalid state, expected %s or %s, got: %s", StatePreparing, StateReady, c.state)
+		log.Crit("invalid state", StatePreparing, StateReady, c.state)
 	}
 	if !c.isRunning {
-		log.Panicf("cannot start readPump, client isn't running")
+		log.Crit("cannot start readPump, client isn't running")
 	}
 	var rm rawMessage
-	log.Debugln("readPump: starting")
-	defer log.Debugln("readPump: exiting")
+	log.Debug("readPump: starting")
+	defer log.Debug("readPump: exiting")
 	defer close(c.sendMessages)
 	for {
 		err := c.readMessage(&rm)
@@ -276,13 +374,13 @@ func (c *Client) readPump() {
 				continue
 			}
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Errorf("unexpectedly closed the connection: %s", err.Error())
+				log.Error("unexpectedly closed the connection", log.Ctx{"error": err.Error()})
 			}
 			break
 		}
 		err = c.handleMessage(rm)
 		if err != nil {
-			log.Errorf("failed to handle the message \"%s\": %s", rm.MessageType, err.Error())
+			log.Error("failed to handle the message", log.Ctx{"msg_type": rm.MessageType, "error": err.Error()})
 		}
 	}
 
@@ -300,7 +398,7 @@ func (c *Client) readMessage(rm *rawMessage) error {
 }
 
 func (c *Client) handleMessage(m rawMessage) (err error) {
-	log.Debugf("handling message \"%s\"", m.MessageType)
+	log.Debug(fmt.Sprintf("handling message \"%s\"", m.MessageType))
 	switch m.MessageType {
 	case "error":
 		var d ErrorData
@@ -309,7 +407,7 @@ func (c *Client) handleMessage(m rawMessage) (err error) {
 			c.onServerError(d)
 		}
 	case "new_event":
-		var d EventData
+		var d Event
 		err = convertToStruct(m.Data, &d)
 		if err == nil {
 			c.onNewEvent(d)
@@ -319,6 +417,12 @@ func (c *Client) handleMessage(m rawMessage) (err error) {
 		err = convertToStruct(m.Data, &d)
 		if err == nil {
 			c.onIntroduction(d)
+		}
+	case "bound_to_sequences":
+		d := []string{}
+		err = convertToStruct(m.Data, d)
+		if err == nil {
+			c.onBoundToSequences(d)
 		}
 	default:
 		return fmt.Errorf("received unknown message: %s", m.MessageType)
@@ -331,34 +435,46 @@ func (c *Client) onIntroduction(d IntroductionData) {
 		log.Warn("received \"introduction\" message from the server more than twice, this might indicate a bug on the server side or here, on the client")
 		return
 	}
-	log.Debugf("got inroduction from the server server_version=%s connection_id=%s app_id=%s", d.ServerVersion, d.ConnectionId, d.AppId)
+	log.Debug("got inroduction from the server", log.Ctx{"app_id": d.AppId, "connection_id": d.ConnectionId, "server_version": d.ServerVersion})
 	c.setState(StateReady)
 	osInfo, err := getOsInfo()
 	if err != nil {
-		log.Debugf("failed to get os info: %s", err.Error())
+		log.Debug(fmt.Sprintf("failed to get os info: %s", err.Error()))
 	}
 	message := &HelloMessage{
 		Subscriptions:          []string{},
 		SupportedFeatures:      []string{"settings:sync", "settings", "purpose:application_host"},
-		Software:               c.userAgent,
-		SettingsSchema:         "supervisor-v1",
+		ClientName:             "Telephonist Supervisor",
 		PID:                    os.Getpid(),
-		SoftwareVersion:        "0.1.0dev",
+		ClientVersion:          "0.1.0dev",
 		OS:                     osInfo,
 		CompatibilityKey:       c.opts.CompatibilityKey,
 		AssumedApplicationType: "host",
+		InstanceID:             c.opts.InstanceID,
+		MachineID:              c.opts.MachineID,
 	}
-	log.Debugf("sending \"hello\" message: %#v", message)
+	log.Debug(fmt.Sprintf("sending \"hello\" message: %#v", message))
 	c.sendMessages <- rawMessage{
 		MessageType: "hello",
 		Data:        message,
 	}
 }
 
-func (c *Client) onNewEvent(d EventData) {
-	log.Infof("got event: %d, related_task=%s", d.Name, d.RelatedTask)
+func (c Client) onBoundToSequences(sequences []string) {
+	c.persistentState.BoundSequences = sequences
+	log.Debug("bound_to_sequences", log.Ctx{"sequences": sequences})
+	if c.opts.OnPersistState != nil {
+		c.opts.OnPersistState(c.persistentState)
+	}
+}
+
+func (c *Client) onNewEvent(d Event) {
+	log.Debug(fmt.Sprintf("got event: %#v", d))
+	if c.opts.OnNewEvent != nil {
+		c.opts.OnNewEvent(d)
+	}
 }
 
 func (c *Client) onServerError(d ErrorData) {
-	log.Errorf("received an error from the server error_type=%s error=%s exception=%s", d.ErrorType, d.Error, d.Exception)
+	log.Error("received an error from the server", log.Ctx{"error_type": d.ErrorType, "exception": d.Exception, "error": d.Error})
 }
