@@ -2,13 +2,17 @@ package telephonist
 
 import (
 	"encoding/json"
-	"errors"
+	"sync"
 )
 
-func convertToStruct(i, objPtr interface{}) error {
-	s, err := json.Marshal(i)
-	if err != nil {
-		return errors.New("failed to marshal data for type conversion: " + err.Error())
-	}
-	return json.Unmarshal(s, objPtr)
+func convertToStruct(raw json.RawMessage, objPtr interface{}) error {
+	return json.Unmarshal(raw, objPtr)
+}
+
+func runOnWG(wg *sync.WaitGroup, fn func()) {
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		fn()
+	}()
 }

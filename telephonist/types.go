@@ -1,6 +1,13 @@
 package telephonist
 
-import "time"
+import (
+	"encoding/json"
+	"errors"
+	"hash/fnv"
+	"time"
+
+	"github.com/google/uuid"
+)
 
 type TicketResponse struct {
 	// Expiration time.Time `json:"exp"`  // ignore this, we don't use it anyway
@@ -15,16 +22,159 @@ type IDResponse struct {
 	ID string `json:"_id"`
 }
 
+type ApplicationView struct {
+	ID              string   `json:"_id"`
+	Tags            []string `json:"tags"`
+	Disabled        bool     `json:"disabled"`
+	Name            bool     `json:"name"`
+	Description     bool     `json:"description"`
+	AccessKey       string   `json:"access_key"`
+	ApplicationType string   `json:"application_type"`
+	// AreSettingsAllowed bool `json:"are_settings_allowed"`
+}
+
 type CreateSequenceRequest struct {
 	RelatedTask string                 `json:"related_task"`
 	CustomName  *string                `json:"custom_name"`
 	Description *string                `json:"description"`
 	Meta        map[string]interface{} `json:"meta"`
+	TaskID      uuid.UUID              `json:"task_id"`
+}
+
+const (
+	TRIGGER_CRON     = "cron"
+	TRIGGER_EVENT    = "event"
+	TRIGGER_FSNOTIFY = "fsnotify"
+)
+
+type TaskTrigger struct {
+	Name     string          `json:"name" validate:"oneof=cron event fsnotify"`
+	Body     json.RawMessage `json:"body"`
+	Disabled bool            `json:"disabled,omitempty"`
+}
+
+// #region TriggerID
+
+var _fnvHash = fnv.New64a()
+
+// GetID returns hash-based id of given trigger
+// NOT thread-safe
+func (trigger *TaskTrigger) GetID() uint64 {
+	_fnvHash.Write([]byte(trigger.Name))
+	_fnvHash.Write([]byte{0})
+	_fnvHash.Write(trigger.Body)
+	id := _fnvHash.Sum64()
+	_fnvHash.Reset()
+	return id
+}
+
+// #endregion
+
+func (t *TaskTrigger) Unmarshal(ptr interface{}) error {
+	return json.Unmarshal(t.Body, ptr)
+}
+
+func (t *TaskTrigger) MushUnmarshal(ptr interface{}) {
+	err := t.Unmarshal(ptr)
+	if err != nil {
+		panic(err)
+	}
+}
+
+func (t *TaskTrigger) MustString() string {
+	var s string
+	t.MushUnmarshal(&s)
+	return s
+}
+
+func (t *TaskTrigger) Validate() error {
+	var ptr interface{}
+
+	switch t.Name {
+	case TRIGGER_CRON:
+	case TRIGGER_EVENT:
+	case TRIGGER_FSNOTIFY:
+		ptr = new(string)
+		break
+	default:
+		return errors.New("invalid trigger type")
+	}
+
+	if err := t.Unmarshal(ptr); err != nil {
+		return errors.New("invalid trigger body")
+	}
+
+	return nil
+}
+
+const (
+	TASK_TYPE_EXEC      = "exec"
+	TASK_TYPE_SCRIPT    = "script"
+	TASK_TYPE_ARBITRARY = "arbitrary"
+)
+
+type DefineTaskRequest struct {
+	ID          uuid.UUID         `json:"_id"`
+	Name        string            `json:"name"`
+	Description *string           `json:"description,omitempty"`
+	Type        string            `json:"task_type,omitempty" validate:"oneof=exec script arbitrary"`
+	Body        interface{}       `json:"body,omitempty"`
+	Env         map[string]string `json:"env,omitempty"`
+	Tags        []string          `json:"tags,omitempty"`
+	Triggers    []TaskTrigger     `json:"triggers,omitempty" validate:"dive,validate_self"`
+}
+
+type DefinedTask struct {
+	Name        string            `json:"name"`
+	Description string            `json:"description"`
+	Type        string            `json:"task_type" validate:"oneof=exec script arbitrary"`
+	Body        interface{}       `json:"body"`
+	Env         map[string]string `json:"env"`
+	Tags        []string          `json:"tags"`
+	Triggers    []*TaskTrigger    `json:"triggers" validate:"dive,required"`
+	ID          uuid.UUID         `json:"_id"`
+	LastUpdated time.Time         `json:"last_updated"`
+	Disabled    bool              `json:"disabled,omitempty"`
+}
+
+type TaskSyncResponse struct {
+	Tasks        []*DefinedTask `json:"tasks"`
+	RemovedTasks []*DefinedTask `json:"removed_tasks"`
+}
+
+type TakenTasks struct {
+	Taken        []string `json:"taken"`
+	Free         []string `json:"free"`
+	BelongToSelf []string `json:"belong_to_self"`
+}
+
+type TaskView struct {
+	// TODO: just put the same fields here
+	DefinedTask
+	QualifiedName string `json:"qualified_name"`
 }
 
 type FinishSequenceRequest struct {
-	Error     string `json:"error_message"`
-	IsSkipped bool   `json:"is_skipped"`
+	Error     *string `json:"error_message"`
+	IsSkipped bool    `json:"is_skipped"`
+}
+
+type LogSeverity int
+
+const (
+	SEVERITY_UNKNOWN LogSeverity = 0
+	SEVERITY_DEBUG   LogSeverity = 10
+	SEVERITY_INFO    LogSeverity = 20
+	SEVERITY_WARNING LogSeverity = 30
+	SEVERITY_ERROR   LogSeverity = 40
+	SEVERITY_FATAL   LogSeverity = 50
+)
+
+type LogEntry struct {
+	Body       interface{} `json:"body"`
+	SequenceID *string     `json:"sequence_id"`
+	Severity   LogSeverity `json:"severity"`
+	CreatedAt  time.Time
 }
 
 type ErrorData struct {
@@ -47,58 +197,37 @@ type Event struct {
 
 type EventData struct {
 	Name       string      `json:"name"`
-	SequenceId *string     `json:"sequence_id"`
 	Data       interface{} `json:"data"`
+	SequenceID string      `json:"sequence_id,omitempty"`
 }
 
-type rawMessage struct {
+type oRawMessage struct {
 	MessageType string      `json:"msg_type"`
 	Data        interface{} `json:"data"`
 }
 
-type SendIf string
-
-const (
-	SEND_ALWAYS             SendIf = "always"
-	SEND_IF_EXIT_CODE_NOT_0 SendIf = "if_non_0_exit"
-	SEND_NEVER              SendIf = "never"
-)
-
-type TaskDescriptor struct {
-	CronString      string   `json:"cron" yaml:"cron"`
-	Command         string   `json:"command" yaml:"command"`
-	SendStderr      SendIf   `json:"send_stderr" yaml:"send_stderr"`
-	SendStdout      SendIf   `json:"send_stdout" yaml:"send_stdout"`
-	OnSuccessEvent  string   `json:"on_success_event" yaml:"on_success_event"`
-	OnFailureEvent  string   `json:"on_failure_event" yaml:"on_failure_event"`
-	OnCompleteEvent string   `json:"on_complete_event" yaml:"on_complete_event"`
-	OnEvents        []string `json:"on_events" yaml:"on_complete_event"`
-}
-
-type SupervisorSettingsV1 struct {
-	Tasks []TaskDescriptor `json:"tasks" yaml:"tasks"`
-}
-
-func DefaultSettings() SupervisorSettingsV1 {
-	return SupervisorSettingsV1{Tasks: []TaskDescriptor{}}
+type iRawMesage struct {
+	MessageType string          `json:"msg_type"`
+	Data        json.RawMessage `json:"data"`
 }
 
 type HelloMessage struct {
-	Subscriptions          []string `json:"subscriptions"`
-	SupportedFeatures      []string `json:"supported_features"`
-	ClientName             string   `json:"client_name"`
-	ClientVersion          string   `json:"client_version"`
-	OS                     string   `json:"os"`
-	PID                    int      `json:"pid"`
-	CompatibilityKey       string   `json:"compatibility_key"`
-	AssumedApplicationType string   `json:"assumed_application_type"`
-	InstanceID             string   `json:"instance_id"`
-	MachineID              string   `json:"machine_id"`
+	Subscriptions     []string  `json:"subscriptions"`
+	SupportedFeatures []string  `json:"supported_features"`
+	ClientName        string    `json:"name"`
+	ClientVersion     string    `json:"version"`
+	CompatibilityKey  string    `json:"compatibility_key"`
+	OS                string    `json:"os_info"`
+	ConnectionUUID    uuid.UUID `json:"connection_uuid"`
+	PID               int       `json:"pid"`
+	InstanceID        uuid.UUID `json:"instance_id"`
+	MachineID         string    `json:"machine_id"`
 }
 
 type IntroductionData struct {
 	ServerVersion  string `json:"server_version"`
 	Authentication string `json:"authentication"`
-	ConnectionId   string `json:"connection_id"`
 	AppId          string `json:"app_id"`
 }
+
+type TasksIncomingMessage []*DefinedTask

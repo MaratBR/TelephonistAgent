@@ -1,0 +1,5 @@
+{
+    "todohighlight.include": [
+        "**/*.go"
+    ]
+}

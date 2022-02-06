@@ -11,53 +11,62 @@ import (
 	"strings"
 	"time"
 
-	"github.com/MaratBR/telephonist-supervisor/config"
-	"github.com/MaratBR/telephonist-supervisor/telephonist"
+	"github.com/MaratBR/TelephonistAgent/logging"
+	"github.com/MaratBR/TelephonistAgent/telephonist"
 	"github.com/denisbrodbeck/machineid"
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
-	log "github.com/inconshreveable/log15"
 	"github.com/juju/fslock"
 	"github.com/parnurzeal/gorequest"
 	"github.com/urfave/cli/v2"
+	"go.uber.org/zap"
 )
 
 const (
-	APPLICATION_NAME = "telephonist-supervisor"
-	VERBOSE_F        = "verbose"
-	ROOT_PATH_F      = "rootPath"
-	CONFIG_PATH_F    = "config"
-	SOCKET_F         = "socket"
+	APPLICATION_NAME     = "TelephonistAgent"
+	VERBOSE_F            = "verbose"
+	CONFIG_FOLDER_PATH_F = "rootPath"
+	CONFIG_PATH_F        = "config"
+	AGENT_CONFIG_PATH_F  = "agent-config"
+	SOCKET_F             = "socket"
 )
 
 var (
 	ErrApplicationKeyIsMissing = errors.New("application key is missing")
+	logger                     = logging.ChildLogger("app")
 )
 
 type AppConfig struct {
-	ApplicationSettings telephonist.SupervisorSettingsV1 `yaml:"application_settings"`
-	ApplicationKey      string                           `yaml:"application_key"`
-	TelephonistAddress  string                           `yaml:"telephonist_address"`
+	ApplicationKey     string
+	TelephonistAddress string
 }
 
 type App struct {
 	cli.App
-	fsLock          *fslock.Lock
-	configFile      *ConfigFile
-	config          AppConfig
-	BackgroundTasks *BackgroundTasks
-	instanceID      string
-	machineID       string
+	fsLock *fslock.Lock
+
+	appConfigFile     *ConfigFile
+	appConfig         *AppConfig
+	backgroundTasks   *BackgroundTasks
+	instanceID        string
+	machineID         string
+	telephonistClient *telephonist.Client
+	executor          *ApplicationExecutor
+	configFolderPath  string
 }
 
 func fatalOnErr(err error) {
 	if err != nil {
-		log.Crit(err.Error())
+		logger.Fatal(err.Error())
 	}
 }
 
 func CreateNewApp() *App {
-	app := &App{}
+	app := &App{
+		appConfig: &AppConfig{
+			TelephonistAddress: "https://localhost:5789",
+		},
+	}
 	app.Before = app.before
 	app.Name = APPLICATION_NAME
 	app.Usage = "Supervise multiple tasks and report all information to the Telephonist server"
@@ -69,14 +78,24 @@ func CreateNewApp() *App {
 			Usage: "if set connects to API using https and wss (enforces HTTPS event if url is set to http://...)",
 		},
 		&cli.StringFlag{
-			Name:  ROOT_PATH_F,
-			Value: "/etc/telephonist",
-			Usage: "path to the main configuration folder with client.yaml and client.lock",
+			Name:  CONFIG_FOLDER_PATH_F,
+			Value: "/etc/telephonist-agent",
+			Usage: "path to the main configuration folder with client.json and client.lock",
 		},
 		&cli.StringFlag{
 			Name:  SOCKET_F,
-			Value: "/var/telephonist/client-daemon.socket",
+			Value: "/var/telephonist-agent/client-daemon.socket",
 			Usage: "sets the path to the file that will be used as a unix socket",
+		},
+		&cli.StringFlag{
+			Name:  CONFIG_PATH_F,
+			Value: "",
+			Usage: "sets the path to the main config file",
+		},
+		&cli.StringFlag{
+			Name:  AGENT_CONFIG_PATH_F,
+			Value: "",
+			Usage: "sets the path to the agent config file",
 		},
 		&cli.BoolFlag{
 			Name:    VERBOSE_F,
@@ -93,7 +112,7 @@ func CreateNewApp() *App {
 		},
 		{
 			Name:   "refetch-config",
-			Usage:  "tries to connect to the running instance of telephonist-supervisor and request a config reload",
+			Usage:  "tries to connect to the running instance of TelephonistAgent and request a config reload",
 			Action: app.refetchConfigAction,
 		},
 	}
@@ -106,11 +125,11 @@ func (a *App) refetchConfigAction(c *cli.Context) error {
 }
 
 func (a *App) testAction(c *cli.Context) error {
-	err := config.Test()
+	err := a.appConfigFile.Load(&AppConfig{})
 	if err != nil {
 		return err
 	}
-	log.Info("config is OK")
+	println("config is OK")
 	return nil
 }
 
@@ -121,49 +140,58 @@ func (a *App) action(c *cli.Context) error {
 	)
 	a.instanceID, err = a.getInstanceID(c)
 	if err != nil {
-		log.Crit("failed to read or write instance id", log.Ctx{"error": err.Error()})
+		logger.Fatal("failed to read or write instance id", zap.String("error", err.Error()))
 	}
 	a.machineID, err = machineid.ProtectedID(APPLICATION_NAME)
 	if err != nil {
-		log.Crit("failed to read machine id")
+		logger.Fatal("failed to read machine id", zap.String("error", err.Error()))
 	}
-	err = a.configFile.Load(&a.config)
+	err = a.appConfigFile.LoadOrCreate(a.appConfig)
 	if err != nil {
-		log.Crit(fmt.Sprintf("failed to load config file", log.Ctx{"file": a.configFile.filepath, "error": err.Error()}))
+		logger.Fatal("failed to load config file",
+			zap.String("error", err.Error()),
+			zap.String("file", a.appConfigFile.filepath),
+		)
 	}
-	log.Debug("debug report", log.Ctx{"instance_id": a.instanceID, "machine_id": a.machineID, "config": a.configFile.filepath})
+	logger.Debug("debug report",
+		zap.String("instance_id", a.instanceID),
+		zap.String("machine_id", a.machineID),
+		zap.String("config", a.appConfigFile.filepath),
+	)
+	logger.Debug("api url = " + a.appConfig.TelephonistAddress)
 
 	err = a.prepareConfig()
 	if err != nil {
 		return fmt.Errorf("prepareConfig: %s", err.Error())
 	}
 
-	tasks := NewBackgroundTasks()
-	tasks.AddFunction(BackgroundFunctionDescriptor{
-		Restart:        true,
-		RestartTimeout: time.Second * 2,
-		Function:       a.runTelephonistClientWrapped,
-		Name:           "runTelephonistClientWrapped",
+	a.backgroundTasks.AddFunction(BackgroundFunctionDescriptor{
+		Restart:          true,
+		RestartTimeout:   time.Second * 30,
+		Function:         a.runExecutor,
+		Name:             "runExecutor",
+		RestartIfNoError: true,
 	})
-	tasks.AddFunction(BackgroundFunctionDescriptor{
-		Restart:        true,
-		RestartTimeout: time.Second * 2,
-		Function:       a.runUnixSocketServerWrapped,
-		Name:           "runUnixSocketServerWrapped",
+	a.backgroundTasks.AddFunction(BackgroundFunctionDescriptor{
+		Restart:          true,
+		RestartTimeout:   time.Second * 30,
+		Function:         a.runUnixSocketServer,
+		Name:             "runUnixSocketServer",
+		RestartIfNoError: true,
 	})
 
-	err = tasks.Run(c)
+	err = a.backgroundTasks.Run(c)
 	if err != nil {
 		return fmt.Errorf("failed to run background tasks: %s", err.Error())
 	}
-	err = tasks.WaitForAll()
+	err = a.backgroundTasks.WaitForAll()
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (a *App) runUnixSocketServerWrapped(ctx *BackgroundFunctionContext) error {
+func (a *App) runUnixSocketServer(ctx *BackgroundFunctionContext) error {
 	socketPath := ctx.Cli.String(SOCKET_F)
 	dirname := filepath.Dir(socketPath)
 
@@ -172,7 +200,7 @@ func (a *App) runUnixSocketServerWrapped(ctx *BackgroundFunctionContext) error {
 	}
 
 	err := os.Remove(socketPath)
-	if err != nil && !os.IsExist(err) {
+	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove unix socket file: %s", err.Error())
 	}
 
@@ -192,7 +220,7 @@ func (a *App) runUnixSocketServerWrapped(ctx *BackgroundFunctionContext) error {
 		}
 	})
 
-	log.Info("starting unix socket server", log.Ctx{"file": socketPath})
+	logger.Info("starting unix socket server", zap.String("file", socketPath))
 	errChan := make(chan error, 1)
 	go func() {
 		errChan <- http.Serve(conn, router)
@@ -207,33 +235,56 @@ func (a *App) runUnixSocketServerWrapped(ctx *BackgroundFunctionContext) error {
 	case <-ctx.CloseChannel:
 		err := conn.Close()
 		if err != nil {
-			log.Error("failed to close connection", log.Ctx{"error": err.Error()})
+			logger.Error("failed to close connection", zap.String("error", err.Error()))
 		}
 		return nil
 	}
 }
 
-func (a *App) runTelephonistClientWrapped(ctx *BackgroundFunctionContext) error {
-	u, err := url.Parse(a.config.TelephonistAddress)
+func (a *App) runExecutor(ctx *BackgroundFunctionContext) error {
+	err := a.createTelephonistClient()
+	if err != nil {
+		return err
+	}
+
+	err = a.createExecutor()
+	if err != nil {
+		return err
+	}
+
+	err = a.executor.Start()
+	if err != nil {
+		return fmt.Errorf("failed to start executor: %s", err.Error())
+	}
+
+	<-ctx.CloseChannel
+
+	a.executor.Stop()
+	time.Sleep(time.Second)
+	// TODO: Wait (properly) for client to finish
+	return nil
+}
+
+func (a *App) createTelephonistClient() error {
+	u, err := url.Parse(a.appConfig.TelephonistAddress)
 	if err != nil {
 		return fmt.Errorf("invalid URL format: %s", err.Error())
 	}
 	if u.Scheme != "" && u.Scheme != "https" && u.Scheme != "http" {
 		return errors.New("invalid URL schema, schema must be either http or https or empty (\"\")")
 	}
-	var client *telephonist.Client
 
 	{
 		u.Scheme = "https"
 		_, _, errs := gorequest.New().Get(u.String()).End()
 		if errs != nil {
-			ctx.Logger.Info("failed to connect to the API through https, wiil assume http protocol is used")
+			logger.Warn("failed to connect to the API through https, will assume http protocol is used")
 			u.Scheme = "http"
 		}
 	}
 
-	client, err = telephonist.NewClient(telephonist.ClientOptions{
-		APIKey:     a.config.ApplicationKey,
+	a.telephonistClient, err = telephonist.NewClient(telephonist.ClientOptions{
+		APIKey:     a.appConfig.ApplicationKey,
 		URL:        u,
 		InstanceID: a.instanceID,
 		MachineID:  a.machineID,
@@ -241,23 +292,28 @@ func (a *App) runTelephonistClientWrapped(ctx *BackgroundFunctionContext) error 
 	if err != nil {
 		return fmt.Errorf("failed to create a client: %s", err.Error())
 	}
+	return nil
+}
 
-	done := make(chan struct{})
-	go func() {
-		err = client.Run()
-		done <- struct{}{}
-	}()
-	select {
-	case <-ctx.CloseChannel:
-		client.Stop()
-	case <-done:
+func (a *App) createExecutor() error {
+	if a.telephonistClient == nil {
+		panic("telephonistClient is not set")
 	}
+	var err error
+	a.executor, err = NewApplicationExecutor(ApplicationExecutorOptions{
+		ConfigPath: a.filenameHelper("executor-config.json"),
+		Client:     a.telephonistClient,
+	})
 	return err
 }
 
+func (a *App) onNewEvent(newEvent telephonist.Event) error {
+	return nil
+}
+
 func (a *App) prepareConfig() error {
-	a.config.ApplicationKey = strings.Trim(a.config.ApplicationKey, " \t\n")
-	if a.config.ApplicationKey == "" {
+	a.appConfig.ApplicationKey = strings.Trim(a.appConfig.ApplicationKey, " \t\n")
+	if a.appConfig.ApplicationKey == "" {
 		return ErrApplicationKeyIsMissing
 	}
 	return nil
@@ -268,15 +324,15 @@ func (a *App) before(c *cli.Context) error {
 
 	}
 
-	fatalOnErr(os.MkdirAll(c.String(ROOT_PATH_F), os.ModePerm))
+	fatalOnErr(os.MkdirAll(c.String(CONFIG_FOLDER_PATH_F), os.ModePerm))
+	a.configFolderPath = c.String(CONFIG_FOLDER_PATH_F)
 	configPath := c.String(CONFIG_PATH_F)
 	if configPath == "" {
-		configPath = a.filenameHelper(c, "client-config.yaml")
+		configPath = a.filenameHelper("client-config.json")
 	}
-	a.configFile = NewConfigFile(configPath)
-	// TODO check if we can open or write config file
-
-	a.BackgroundTasks = NewBackgroundTasks()
+	a.appConfigFile = NewConfigFile(configPath)
+	//TODO: check if we can open or write config file
+	a.backgroundTasks = NewBackgroundTasks()
 
 	return nil
 }
@@ -290,22 +346,22 @@ func (a *App) after(c *cli.Context) error {
 	return nil
 }
 
-func (a *App) filenameHelper(c *cli.Context, filename string) string {
-	return filepath.Join(c.String(ROOT_PATH_F), filename)
+func (a *App) filenameHelper(filename string) string {
+	return filepath.Join(a.configFolderPath, filename)
 }
 
 func (a *App) lockFile(c *cli.Context) error {
 	if a.fsLock != nil {
 		return nil
 	}
-	lockFilepath := a.filenameHelper(c, "client.lock")
+	lockFilepath := a.filenameHelper("client.lock")
 	a.fsLock = fslock.New(lockFilepath)
 	return a.fsLock.LockWithTimeout(time.Second * 1)
 }
 
 func (a *App) getInstanceID(c *cli.Context) (string, error) {
 	var id string
-	path := a.filenameHelper(c, ".client-id")
+	path := a.filenameHelper(".client-id")
 
 	data, err := os.ReadFile(path)
 	if err != nil {

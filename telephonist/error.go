@@ -1,7 +1,6 @@
 package telephonist
 
 import (
-	"net/http"
 	"strconv"
 	"strings"
 )
@@ -33,11 +32,11 @@ func MustExtractCombined(err error) []error {
 	return c
 }
 
-type HTTPError struct {
-	Status int
+type UnexpectedStatusCode struct {
+	Status     int
+	StatusText string
 }
 
-func (e HTTPError) Error() string {
-	s := "Unexpected http status code: " + strconv.Itoa(e.Status) + " - " + http.StatusText(e.Status)
-	return s
+func (err UnexpectedStatusCode) Error() string {
+	return "Unexpected status code: " + strconv.Itoa(err.Status) + " " + err.StatusText
 }

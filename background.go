@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	log "github.com/inconshreveable/log15"
 	"github.com/urfave/cli/v2"
+	"go.uber.org/zap"
 )
 
 var (
@@ -20,15 +20,30 @@ type BackgroundFunction func(c *BackgroundFunctionContext) error
 type BackgroundFunctionContext struct {
 	Cli          *cli.Context
 	CloseChannel chan struct{}
-	Logger       log.Logger
+}
+
+type RestartInfo struct {
+	AttemptInARow int
+	LastError     error
+	TaskName      string
+}
+
+type TimeoutPolicy interface {
+	Timeout(RestartInfo) time.Duration
+}
+type TimeoutPolicyFunction func(RestartInfo) time.Duration
+
+func (fn TimeoutPolicyFunction) Timeout(i RestartInfo) time.Duration {
+	return fn(i)
 }
 
 type BackgroundFunctionDescriptor struct {
-	Function         BackgroundFunction
-	Restart          bool
-	RestartTimeout   time.Duration
-	RestartIfNoError bool
-	Name             string
+	Function             BackgroundFunction
+	Restart              bool
+	RestartTimeout       time.Duration
+	RestartIfNoError     bool
+	Name                 string
+	RestartTimeoutPolicy TimeoutPolicy
 }
 
 type backgroundFunctionInternal struct {
@@ -36,7 +51,6 @@ type backgroundFunctionInternal struct {
 	closeChannel chan struct{}
 	lastError    error
 	isRunning    bool
-	logger       log.Logger
 }
 
 type ShutdownMessage struct{}
@@ -58,11 +72,9 @@ func (h BackgroundTasks) AddFunction(descriptor BackgroundFunctionDescriptor) er
 	if exists {
 		return fmt.Errorf("background task \"%s\" already registered", descriptor.Name)
 	}
-	logger := log.New(log.Ctx{"module": fmt.Sprintf("Background/%s", descriptor.Name)})
 	h.fns[descriptor.Name] = &backgroundFunctionInternal{
 		descriptor:   descriptor,
 		closeChannel: make(chan struct{}),
-		logger:       logger,
 	}
 	return nil
 }
@@ -87,29 +99,39 @@ func (h BackgroundTasks) wrappedFunction(c *cli.Context, fn *backgroundFunctionI
 	ctx := BackgroundFunctionContext{
 		Cli:          c,
 		CloseChannel: fn.closeChannel,
-		Logger:       fn.logger,
 	}
 	defer func() {
-		ctx.Logger.Debug("exiting...", fn.descriptor.Name)
+		logger.Debug("exiting...", zap.String("taskName", fn.descriptor.Name))
 		fn.isRunning = false
 		h.wg.Done()
 	}()
 
-	ctx.Logger.Info("starting the task")
+	logger.Info("starting the task "+fn.descriptor.Name,
+		zap.String("taskName", fn.descriptor.Name),
+		zap.Duration("restartTimeout", fn.descriptor.RestartTimeout),
+	)
 
 	for {
 		fn.lastError = fn.descriptor.Function(&ctx)
 
 		if fn.lastError != nil {
-			ctx.Logger.Error(fn.lastError.Error())
+			logger.Error(fn.lastError.Error(),
+				zap.String("taskName", fn.descriptor.Name),
+			)
 			if fn.descriptor.Restart {
-				ctx.Logger.Info(fmt.Sprintf("restarting due to an error in %s...", fn.descriptor.RestartTimeout.String()))
+				logger.Info(fmt.Sprintf("restarting due to an error in %s...", fn.descriptor.RestartTimeout.String()),
+					zap.String("taskName", fn.descriptor.Name),
+					zap.Duration("restartTimeout", fn.descriptor.RestartTimeout),
+				)
 				time.Sleep(fn.descriptor.RestartTimeout)
 				continue
 			}
 		} else {
 			if fn.descriptor.Restart && fn.descriptor.RestartIfNoError {
-				ctx.Logger.Info(fmt.Sprintf("RestartIfNoError is set to true, no error occured, restarting in %s...", fn.descriptor.RestartTimeout.String()))
+				logger.Info(fmt.Sprintf("RestartIfNoError is set to true, no error occured, restarting in %s...", fn.descriptor.RestartTimeout.String()),
+					zap.String("taskName", fn.descriptor.Name),
+					zap.Duration("restartTimeout", fn.descriptor.RestartTimeout),
+				)
 				time.Sleep(fn.descriptor.RestartTimeout)
 				continue
 			}
@@ -126,7 +148,9 @@ func (h BackgroundTasks) WaitForAll() error {
 	errorsCount := 0
 	for _, fn := range h.fns {
 		if fn.lastError != nil {
-			log.Error(fmt.Sprintf("lastError = %s", fn.lastError.Error()))
+			logger.Error("BackgroundTasks: lastError",
+				zap.String("error", fn.lastError.Error()),
+			)
 			errorsCount += 1
 		}
 	}

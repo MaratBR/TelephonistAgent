@@ -1,9 +1,8 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
-
-	"gopkg.in/yaml.v2"
 )
 
 type ConfigFile struct {
@@ -20,8 +19,19 @@ func (cf *ConfigFile) Load(ptr interface{}) error {
 		return err
 	}
 	defer f.Close()
-	decoder := yaml.NewDecoder(f)
+	decoder := json.NewDecoder(f)
 	return decoder.Decode(ptr)
+}
+
+func (cf *ConfigFile) LoadOrCreate(ptr interface{}) error {
+	if ptr == nil {
+		panic("Cannot call LoadOrCreate with nil pointer")
+	}
+	err := cf.Load(ptr)
+	if os.IsNotExist(err) {
+		err = cf.Write(ptr)
+	}
+	return err
 }
 
 func (cf *ConfigFile) Write(ptr interface{}) error {
@@ -30,6 +40,7 @@ func (cf *ConfigFile) Write(ptr interface{}) error {
 		return err
 	}
 	defer f.Close()
-	encoder := yaml.NewEncoder(f)
+	encoder := json.NewEncoder(f)
+	encoder.SetIndent("", "\t")
 	return encoder.Encode(ptr)
 }

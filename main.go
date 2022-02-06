@@ -4,7 +4,6 @@ import (
 	"os"
 	"time"
 
-	log "github.com/inconshreveable/log15"
 	"github.com/juju/fslock"
 )
 
@@ -21,6 +20,6 @@ func main() {
 	app := CreateNewApp()
 	err := app.Run(os.Args)
 	if err != nil {
-		log.Crit(err.Error())
+		logger.Fatal(err.Error())
 	}
 }
