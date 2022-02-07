@@ -41,6 +41,6 @@ func (cf *ConfigFile) Write(ptr interface{}) error {
 	}
 	defer f.Close()
 	encoder := json.NewEncoder(f)
-	encoder.SetIndent("", "\t")
+	encoder.SetIndent("", "    ")
 	return encoder.Encode(ptr)
 }

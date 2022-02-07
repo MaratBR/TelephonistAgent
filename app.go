@@ -3,19 +3,15 @@ package main
 import (
 	"errors"
 	"fmt"
-	"net"
-	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/MaratBR/TelephonistAgent/logging"
 	"github.com/MaratBR/TelephonistAgent/telephonist"
-	"github.com/denisbrodbeck/machineid"
-	"github.com/google/uuid"
-	"github.com/gorilla/mux"
 	"github.com/juju/fslock"
 	"github.com/parnurzeal/gorequest"
 	"github.com/urfave/cli/v2"
@@ -47,7 +43,6 @@ type App struct {
 
 	appConfigFile     *ConfigFile
 	appConfig         *AppConfig
-	backgroundTasks   *BackgroundTasks
 	instanceID        string
 	machineID         string
 	telephonistClient *telephonist.Client
@@ -133,19 +128,38 @@ func (a *App) testAction(c *cli.Context) error {
 	return nil
 }
 
+func (a *App) before(c *cli.Context) error {
+	if c.Bool(VERBOSE_F) {
+
+	}
+
+	fatalOnErr(os.MkdirAll(c.String(CONFIG_FOLDER_PATH_F), os.ModePerm))
+	a.configFolderPath = c.String(CONFIG_FOLDER_PATH_F)
+	configPath := c.String(CONFIG_PATH_F)
+	if configPath == "" {
+		configPath = a.filenameHelper("client-config.json")
+	}
+	a.appConfigFile = NewConfigFile(configPath)
+	//TODO: check if we can open or write config file
+
+	return nil
+}
+
+func (a *App) after(c *cli.Context) error {
+	if a.fsLock != nil {
+		if err := a.fsLock.Unlock(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// action runs the main action of this app (agent itself)
 func (a *App) action(c *cli.Context) error {
 	fatalOnErr(a.lockFile(c))
 	var (
 		err error
 	)
-	a.instanceID, err = a.getInstanceID(c)
-	if err != nil {
-		logger.Fatal("failed to read or write instance id", zap.String("error", err.Error()))
-	}
-	a.machineID, err = machineid.ProtectedID(APPLICATION_NAME)
-	if err != nil {
-		logger.Fatal("failed to read machine id", zap.String("error", err.Error()))
-	}
 	err = a.appConfigFile.LoadOrCreate(a.appConfig)
 	if err != nil {
 		logger.Fatal("failed to load config file",
@@ -153,9 +167,7 @@ func (a *App) action(c *cli.Context) error {
 			zap.String("file", a.appConfigFile.filepath),
 		)
 	}
-	logger.Debug("debug report",
-		zap.String("instance_id", a.instanceID),
-		zap.String("machine_id", a.machineID),
+	logger.Debug("config file located",
 		zap.String("config", a.appConfigFile.filepath),
 	)
 	logger.Debug("api url = " + a.appConfig.TelephonistAddress)
@@ -165,84 +177,7 @@ func (a *App) action(c *cli.Context) error {
 		return fmt.Errorf("prepareConfig: %s", err.Error())
 	}
 
-	a.backgroundTasks.AddFunction(BackgroundFunctionDescriptor{
-		Restart:          true,
-		RestartTimeout:   time.Second * 30,
-		Function:         a.runExecutor,
-		Name:             "runExecutor",
-		RestartIfNoError: true,
-	})
-	a.backgroundTasks.AddFunction(BackgroundFunctionDescriptor{
-		Restart:          true,
-		RestartTimeout:   time.Second * 30,
-		Function:         a.runUnixSocketServer,
-		Name:             "runUnixSocketServer",
-		RestartIfNoError: true,
-	})
-
-	err = a.backgroundTasks.Run(c)
-	if err != nil {
-		return fmt.Errorf("failed to run background tasks: %s", err.Error())
-	}
-	err = a.backgroundTasks.WaitForAll()
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func (a *App) runUnixSocketServer(ctx *BackgroundFunctionContext) error {
-	socketPath := ctx.Cli.String(SOCKET_F)
-	dirname := filepath.Dir(socketPath)
-
-	if err := os.MkdirAll(dirname, os.ModePerm); err != nil {
-		return err
-	}
-
-	err := os.Remove(socketPath)
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("failed to remove unix socket file: %s", err.Error())
-	}
-
-	conn, err := net.Listen("unix", socketPath)
-	if err != nil {
-		return errors.New("in net.Listen: " + err.Error())
-	}
-
-	defer conn.Close()
-	router := mux.NewRouter()
-
-	router.HandleFunc("/telephonist/config-reload", func(rw http.ResponseWriter, r *http.Request) {
-		if r.Method != "POST" {
-			rw.WriteHeader(405)
-		} else {
-			//reloadConfig()
-		}
-	})
-
-	logger.Info("starting unix socket server", zap.String("file", socketPath))
-	errChan := make(chan error, 1)
-	go func() {
-		errChan <- http.Serve(conn, router)
-	}()
-
-	select {
-	case err = <-errChan:
-		if err != nil {
-			return errors.New("in http.Serve: " + err.Error())
-		}
-		return errors.New("http.Server unexpectedly exited without any errors")
-	case <-ctx.CloseChannel:
-		err := conn.Close()
-		if err != nil {
-			logger.Error("failed to close connection", zap.String("error", err.Error()))
-		}
-		return nil
-	}
-}
-
-func (a *App) runExecutor(ctx *BackgroundFunctionContext) error {
-	err := a.createTelephonistClient()
+	err = a.createTelephonistClient()
 	if err != nil {
 		return err
 	}
@@ -257,11 +192,12 @@ func (a *App) runExecutor(ctx *BackgroundFunctionContext) error {
 		return fmt.Errorf("failed to start executor: %s", err.Error())
 	}
 
-	<-ctx.CloseChannel
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt)
+	<-sigChan
 
 	a.executor.Stop()
-	time.Sleep(time.Second)
-	// TODO: Wait (properly) for client to finish
+
 	return nil
 }
 
@@ -284,10 +220,8 @@ func (a *App) createTelephonistClient() error {
 	}
 
 	a.telephonistClient, err = telephonist.NewClient(telephonist.ClientOptions{
-		APIKey:     a.appConfig.ApplicationKey,
-		URL:        u,
-		InstanceID: a.instanceID,
-		MachineID:  a.machineID,
+		APIKey: a.appConfig.ApplicationKey,
+		URL:    u,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create a client: %s", err.Error())
@@ -307,41 +241,12 @@ func (a *App) createExecutor() error {
 	return err
 }
 
-func (a *App) onNewEvent(newEvent telephonist.Event) error {
-	return nil
-}
+// #region Utils
 
 func (a *App) prepareConfig() error {
 	a.appConfig.ApplicationKey = strings.Trim(a.appConfig.ApplicationKey, " \t\n")
 	if a.appConfig.ApplicationKey == "" {
 		return ErrApplicationKeyIsMissing
-	}
-	return nil
-}
-
-func (a *App) before(c *cli.Context) error {
-	if c.Bool(VERBOSE_F) {
-
-	}
-
-	fatalOnErr(os.MkdirAll(c.String(CONFIG_FOLDER_PATH_F), os.ModePerm))
-	a.configFolderPath = c.String(CONFIG_FOLDER_PATH_F)
-	configPath := c.String(CONFIG_PATH_F)
-	if configPath == "" {
-		configPath = a.filenameHelper("client-config.json")
-	}
-	a.appConfigFile = NewConfigFile(configPath)
-	//TODO: check if we can open or write config file
-	a.backgroundTasks = NewBackgroundTasks()
-
-	return nil
-}
-
-func (a *App) after(c *cli.Context) error {
-	if a.fsLock != nil {
-		if err := a.fsLock.Unlock(); err != nil {
-			return err
-		}
 	}
 	return nil
 }
@@ -359,38 +264,4 @@ func (a *App) lockFile(c *cli.Context) error {
 	return a.fsLock.LockWithTimeout(time.Second * 1)
 }
 
-func (a *App) getInstanceID(c *cli.Context) (string, error) {
-	var id string
-	path := a.filenameHelper(".client-id")
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			id, err = writeNewInstanceID(path)
-			if err != nil {
-				return "", err
-			}
-		} else {
-			return "", err
-		}
-	} else {
-		id = strings.Trim(string(data), " \t\n")
-	}
-
-	if id == "" {
-		id, err = writeNewInstanceID(path)
-		if err != nil {
-			return "", err
-		}
-	}
-	return id, nil
-}
-
-func writeNewInstanceID(path string) (string, error) {
-	id := uuid.NewString()
-	err := os.WriteFile(path, []byte(id), os.ModePerm)
-	if err != nil {
-		return "", err
-	}
-	return id, nil
-}
+// #endregion

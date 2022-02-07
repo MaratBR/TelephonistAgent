@@ -23,6 +23,10 @@ var (
 	wsLogger = logging.ChildLogger("telephonist-ws")
 )
 
+const (
+	restartTimeout = time.Second * 20
+)
+
 type ClientState uint8
 
 func (s ClientState) String() string {
@@ -66,16 +70,15 @@ type WSClientOptions struct {
 type WSClient struct {
 	opts             WSClientOptions
 	client           *Client
-	mut              sync.Mutex
 	conn             *websocket.Conn
 	sendMessages     chan oRawMessage
 	state            ClientState
 	userAgent        string
-	logWorkerChannel chan LogEntry
 	connectionID     uuid.UUID
 	eventChannels    map[string]map[uint32]eventsChannel
 	eventChannelsSeq uint32
 	lastError        error
+	mut              sync.Mutex
 }
 
 func NewWSClient(client *Client, options WSClientOptions) *WSClient {
@@ -154,8 +157,17 @@ func (c *WSClient) runLoop() {
 	c.transitionState(StateStopped, StateDisconnected)
 	for c.state != StateStopped {
 		c.lastError = c.connect()
-		go c.readPump()
-		c.writePump()
+		if c.lastError != nil {
+			wsLogger.Error("failed to connect to the server", zap.Error(c.lastError))
+		} else {
+			c.requireState(StatePreparing)
+			go c.readPump()
+			c.writePump()
+		}
+
+		// TODO: make restarting optional
+		wsLogger.Warn(fmt.Sprintf("restarting in %s", restartTimeout.String()))
+		time.Sleep(restartTimeout)
 	}
 }
 
@@ -224,7 +236,6 @@ func (c *WSClient) getWebsocketURL(prefix, ticket string) *url.URL {
 }
 
 func (c *WSClient) writePump() {
-	c.requireState(StatePreparing)
 	t := time.NewTicker(pingPeriod)
 	wsLogger.Debug("writePump: starting")
 
@@ -258,25 +269,19 @@ func (c *WSClient) writePump() {
 				wsLogger.Error("failed to write to socket", zap.String("error", err.Error()))
 				looping = false
 			}
-			err = w.Close()
+			w.Close()
 		case <-t.C:
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-				break
+				looping = false
 			}
 		}
 	}
 
-	// set timeout to 100ms instead of standard 10 seconds or so
-	c.conn.SetWriteDeadline(time.Now().Add(time.Millisecond * 100))
-	c.conn.WriteMessage(websocket.CloseMessage, []byte{})
-	c.conn.Close()
-	c.requireState(StateConnected, StatePreparing)
-	c.setState(StateDisconnected)
+	c.onDisconnect()
 }
 
 func (c *WSClient) readPump() {
-	c.requireState(StatePreparing)
 	var rm iRawMesage
 	wsLogger.Debug("readPump: starting")
 	for {
@@ -298,6 +303,20 @@ func (c *WSClient) readPump() {
 				zap.Error(err),
 			)
 		}
+	}
+	c.onDisconnect()
+}
+
+func (c *WSClient) onDisconnect() {
+	c.mut.Lock()
+	defer c.mut.Unlock()
+	if c.state == StateConnected || c.state == StatePreparing {
+		c.conn.SetWriteDeadline(time.Now().Add(time.Millisecond * 100))
+		c.conn.WriteMessage(websocket.CloseMessage, []byte{})
+		c.conn.Close()
+		wsLogger.Warn("connection closed")
+		close(c.sendMessages)
+		c.setState(StateDisconnected)
 	}
 }
 
@@ -333,8 +352,8 @@ func (c *WSClient) handleMessage(m iRawMesage) (err error) {
 			c.onNewEvent(d)
 		}
 	case MI_TASKS:
-		var d TasksIncomingMessage
-		err = convertToStruct(m.Data, &d)
+		d := new(TasksIncomingMessage)
+		err = convertToStruct(m.Data, d)
 		if err == nil {
 			c.onNewTasks(d)
 		}
@@ -381,7 +400,7 @@ func (c *WSClient) onIntroduction(d IntroductionData) {
 		wsLogger.Warn("(BUG?) received \"introduction\" message from the server more than twice, this might indicate a bug on the server side or here, on the client")
 		return
 	}
-	wsLogger.Debug("got inroduction from the server",
+	wsLogger.Debug("got introduction from the server",
 		zap.String("app_id", d.AppId),
 		zap.String("server_version", d.ServerVersion),
 	)
@@ -428,9 +447,9 @@ func (c *WSClient) onNewEvent(d Event) {
 	}
 }
 
-func (c *WSClient) onNewTasks(tasks TasksIncomingMessage) {
+func (c *WSClient) onNewTasks(tasks *TasksIncomingMessage) {
 	if c.opts.OnTasks != nil {
-		c.opts.OnTasks(tasks)
+		c.opts.OnTasks(tasks.Tasks)
 	}
 }
 

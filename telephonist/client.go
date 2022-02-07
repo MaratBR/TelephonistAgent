@@ -20,6 +20,7 @@ var (
 	ErrClientIsAlreadyRunning    = errors.New("client is already running")
 	ErrLogWorkerIsAlreadyRunning = errors.New("log worker is already running")
 	ErrClientIsNotConnected      = errors.New("client is not connected")
+	ErrCloseMessage              = errors.New("CloseMessage received")
 
 	apiLogger = logging.ChildLogger("telephonist-api")
 )
@@ -52,17 +53,8 @@ type TaskRemovedCallback func(uuid.UUID)
 type TaskAddedCallback func(*DefinedTask)
 
 type ClientOptions struct {
-	APIKey                 string   `validate:"required"`
-	URL                    *url.URL `validate:"required"`
-	Timeout                time.Duration
-	ConnectionRetryTimeout time.Duration
-	CompatibilityKey       string
-	InstanceID             string
-	MachineID              string
-	OnPersistState         OnPersistStateCallback
-	OnTask                 TaskAddedCallback
-	OnTasks                TasksUpdatedCallback
-	OnTaskRemoved          TaskRemovedCallback
+	APIKey string   `validate:"required"`
+	URL    *url.URL `validate:"required"`
 }
 
 type ClientPersistentState struct {
@@ -95,15 +87,6 @@ func NewClient(options ClientOptions) (*Client, error) {
 	}
 	if options.URL.Scheme != "http" && options.URL.Scheme != "https" {
 		return nil, errors.New("schema must be http or https")
-	}
-	if options.ConnectionRetryTimeout == 0 {
-		options.ConnectionRetryTimeout = time.Second * 30
-	}
-	if options.Timeout == 0 {
-		options.Timeout = time.Second * 20
-	}
-	if options.CompatibilityKey == "" {
-		options.CompatibilityKey = "golang-Agent-compatibility-v1"
 	}
 	return &Client{
 		opts: options,

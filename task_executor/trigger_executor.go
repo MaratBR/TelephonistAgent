@@ -160,12 +160,6 @@ func (e *FSTriggersExecutor) ScheduleByID(id uint64, trigger *telephonist.TaskTr
 	return id, nil
 }
 
-func (e *FSTriggersExecutor) trigger(id uint64, t *telephonist.TaskTrigger) {
-	if e.callback != nil {
-		e.callback(TriggeredEvent{TriggerID: id, Trigger: t})
-	}
-}
-
 func (e *FSTriggersExecutor) Unschedule(id uint64) (error, bool) {
 	trigger, exists := e.triggers[id]
 	if exists {
@@ -432,7 +426,7 @@ func (e *CompositeTriggersExecutor) Start() error {
 	}
 	var err error
 	var i int
-	for i = 0; i < len(e.executors) && err != nil; i++ {
+	for i = 0; i < len(e.executors) && err == nil; i++ {
 		err = e.executors[i].Start()
 	}
 	if err != nil {

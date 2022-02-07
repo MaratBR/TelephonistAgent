@@ -230,4 +230,7 @@ type IntroductionData struct {
 	AppId          string `json:"app_id"`
 }
 
-type TasksIncomingMessage []*DefinedTask
+type TasksIncomingMessage struct {
+	Tasks  []*DefinedTask       `json:"tasks"`
+	Errors map[uuid.UUID]string `json:"errors"`
+}

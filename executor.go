@@ -33,6 +33,7 @@ func NewApplicationExecutor(options ApplicationExecutorOptions) (*ApplicationExe
 	return e, nil
 }
 
+// Start loads executor config, starts underlying task exectur and also starts telephonist client
 func (e *ApplicationExecutor) Start() error {
 	if e.executor != nil {
 		return nil
@@ -48,7 +49,7 @@ func (e *ApplicationExecutor) Start() error {
 		InstanceID:    e.getOrSetInstanceID(),
 		OnConnected:   e.onConnected,
 	})
-	e.wsc.StarexectAsync()
+	e.wsc.StartAsync()
 	err = e.createExecutor()
 	if err != nil {
 		return utils.ChainError("failed to create an executor", err)
