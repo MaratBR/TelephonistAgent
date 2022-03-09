@@ -38,10 +38,12 @@ const (
 	MI_INTRODUCTION      = "introduction"
 	MI_NEW_EVENT         = "new_event"
 	MI_ERROR             = "error"
+	MI_LOGS_SENT         = "logs_sent"
 	MO_TASK_SYNC         = "synchronize"
 	MO_SUBSCRIBE         = "subscribe"
 	MO_UNSUBSCRIBE       = "unsubscribe"
 	MO_SET_SUBSCRIPTIONS = "set_subscriptions"
+	MO_SEND_LOG          = "send_log"
 )
 
 const (
@@ -75,7 +77,6 @@ type Client struct {
 	// rest api options
 	opts      ClientOptions
 	userAgent string
-	agent     *gorequest.SuperAgent
 }
 
 func NewClient(options ClientOptions) (*Client, error) {
@@ -92,73 +93,75 @@ func NewClient(options ClientOptions) (*Client, error) {
 		opts: options,
 		userAgent: fmt.Sprintf(
 			"Telephonist Agent (Golang) " + VERSION),
-		agent: gorequest.New(),
 	}, nil
 }
 
 // #region Initialization and utils
 
-func (c *Client) httpPost(relativeURL string, data interface{}, response interface{}) (gorequest.Response, CombinedError) {
+func (c *Client) httpPost(relativeURL string, data interface{}, response interface{}) (gorequest.Response, *CombinedError) {
 	if data != nil {
 		typ := reflect.TypeOf(data)
 
 		if typ.Kind() == reflect.Struct || (typ.Kind() == reflect.Ptr && typ.Elem().Kind() == reflect.Struct) {
 			err := Validator.Struct(data)
 			if err != nil {
-				return nil, CombinedError{err}
+				return nil, &CombinedError{Errors: []error{err}}
 			}
 		}
 	}
-	req := c.agent.
+	req := gorequest.New().
 		Post(c.getUrl(relativeURL).String()).
 		Set(_AUTHORIZATION, "Bearer "+c.opts.APIKey)
 	if data != nil {
 		req = req.SendStruct(data)
 	}
 	var (
-		err  CombinedError
+		errs []error
 		resp gorequest.Response
 	)
+	if response == nil {
+		resp, _, errs = req.End()
+	} else {
+		resp, _, errs = req.EndStruct(response)
+	}
+	if len(errs) != 0 {
+		if resp != nil && resp.StatusCode >= 300 {
+			return resp, &CombinedError{Errors: []error{&UnexpectedStatusCode{Status: resp.StatusCode, StatusText: resp.Status}}}
+		}
+		return resp, &CombinedError{Errors: errs}
+	}
+	return resp, nil
+}
+
+func (c *Client) delete(path string) *CombinedError {
+	resp, _, err := gorequest.New().
+		Delete(c.getUrl(path).String()).
+		Set(_AUTHORIZATION, "Bearer "+c.opts.APIKey).
+		End()
+	if err != nil {
+		return &CombinedError{Errors: err}
+	}
+	if resp.StatusCode >= 300 {
+		return &CombinedError{Errors: []error{&UnexpectedStatusCode{Status: resp.StatusCode, StatusText: resp.Status}}}
+	}
+	return nil
+}
+
+func (c *Client) get(path string, response interface{}) *CombinedError {
+	req := gorequest.New().Get(c.getUrl(path).String()).Set(_AUTHORIZATION, "Bearer "+c.opts.APIKey)
+
+	var resp gorequest.Response
+	var err []error
 	if response == nil {
 		resp, _, err = req.End()
 	} else {
 		resp, _, err = req.EndStruct(response)
 	}
-	if err == nil && resp.StatusCode >= 300 {
-		return resp, CombinedError{UnexpectedStatusCode{Status: resp.StatusCode, StatusText: resp.Status}}
-	}
-	return resp, err
-}
-
-func (c Client) delete(path string) CombinedError {
-	resp, _, err := c.agent.
-		Delete(c.getUrl(path).String()).
-		Set(_AUTHORIZATION, "Bearer "+c.opts.APIKey).
-		End()
 	if err != nil {
-		return CombinedError(err)
+		return &CombinedError{Errors: err}
 	}
 	if resp.StatusCode >= 300 {
-		return CombinedError{UnexpectedStatusCode{Status: resp.StatusCode, StatusText: resp.Status}}
-	}
-	return nil
-}
-
-func (c *Client) get(path string, response interface{}) CombinedError {
-	c.agent.Get(path).Set(_AUTHORIZATION, "Bearer "+c.opts.APIKey)
-
-	var resp gorequest.Response
-	var err []error
-	if response == nil {
-		resp, _, err = c.agent.End()
-	} else {
-		resp, _, err = c.agent.EndStruct(response)
-	}
-	if err != nil {
-		return CombinedError(err)
-	}
-	if resp.StatusCode >= 300 {
-		return CombinedError{UnexpectedStatusCode{Status: resp.StatusCode, StatusText: resp.Status}}
+		return &CombinedError{Errors: []error{&UnexpectedStatusCode{Status: resp.StatusCode, StatusText: resp.Status}}}
 	}
 	return nil
 }
@@ -174,7 +177,11 @@ func (c *Client) getUrl(sUrl string) *url.URL {
 
 // #region REST API
 
-func (c Client) Publish(event EventData) CombinedError {
+func (c *Client) Probe() *CombinedError {
+	return c.get("probe", nil)
+}
+
+func (c *Client) Publish(event EventData) *CombinedError {
 	_, err := c.httpPost("events/publish", event, nil)
 	if err != nil {
 		return err
@@ -186,18 +193,18 @@ func (c Client) Publish(event EventData) CombinedError {
 	return nil
 }
 
-func (c Client) UpdateSequencMeta(SequenceID string, meta map[string]interface{}) CombinedError {
+func (c Client) UpdateSequencMeta(SequenceID string, meta map[string]interface{}) *CombinedError {
 	resp, err := c.httpPost("sequences/"+SequenceID+"/meta", meta, nil)
 	if err != nil {
 		return err
 	}
 	if resp.StatusCode != 200 {
-		return []error{fmt.Errorf("unexpected status code: %s", resp.Status)}
+		return &CombinedError{Errors: []error{fmt.Errorf("unexpected status code: %s", resp.Status)}}
 	}
 	return nil
 }
 
-func (c Client) CreateSequence(data CreateSequenceRequest) (*IDResponse, CombinedError) {
+func (c *Client) CreateSequence(data CreateSequenceRequest) (*IDResponse, *CombinedError) {
 	resp := new(IDResponse)
 	_, err := c.httpPost("sequences", data, resp)
 	if err != nil {
@@ -206,29 +213,29 @@ func (c Client) CreateSequence(data CreateSequenceRequest) (*IDResponse, Combine
 	return resp, nil
 }
 
-func (c Client) FinishSequence(SequenceID string, body FinishSequenceRequest) (*DetailResponse, CombinedError) {
+func (c *Client) FinishSequence(SequenceID string, body FinishSequenceRequest) (*DetailResponse, *CombinedError) {
 	resp := new(DetailResponse)
-	_, _, errs := c.agent.
+	_, _, errs := gorequest.New().
 		Post(c.getUrl("sequences/"+SequenceID+"/finish").String()).
 		SendStruct(body).
 		Set(_AUTHORIZATION, "Bearer "+c.opts.APIKey).
 		EndStruct(resp)
 	if errs != nil {
-		return nil, CombinedError(errs)
+		return nil, &CombinedError{Errors: errs}
 	}
 	return resp, nil
 }
 
-func (c Client) DefineTask(r DefineTaskRequest) CombinedError {
+func (c Client) DefineTask(r DefineTaskRequest) *CombinedError {
 	_, err := c.httpPost("defined-tasks", r, nil)
 	return err
 }
 
-func (c Client) DropTask(taskID uuid.UUID) CombinedError {
+func (c Client) DropTask(taskID uuid.UUID) *CombinedError {
 	return c.delete("defined-tasks/" + taskID.String())
 }
 
-func (c Client) GetTasks() ([]TaskView, CombinedError) {
+func (c Client) GetTasks() ([]TaskView, *CombinedError) {
 	tasks := make([]TaskView, 0)
 	err := c.get("defined-tasks", tasks)
 	if err != nil {
@@ -237,7 +244,7 @@ func (c Client) GetTasks() ([]TaskView, CombinedError) {
 	return tasks, nil
 }
 
-func (c *Client) SyncTasks(tasks []DefinedTask) (*TaskSyncResponse, CombinedError) {
+func (c *Client) SyncTasks(tasks []DefinedTask) (*TaskSyncResponse, *CombinedError) {
 	resp := new(TaskSyncResponse)
 	_, err := c.httpPost("defined-tasks/synchronize", map[string]interface{}{
 		"tasks": tasks,
@@ -248,7 +255,7 @@ func (c *Client) SyncTasks(tasks []DefinedTask) (*TaskSyncResponse, CombinedErro
 	return resp, nil
 }
 
-func (c *Client) CheckTaskNamesArray(names []string) (*TakenTasks, CombinedError) {
+func (c *Client) CheckTaskNamesArray(names []string) (*TakenTasks, *CombinedError) {
 	resp := new(TakenTasks)
 	_, err := c.httpPost("defined-tasks/check", names, resp)
 	if err != nil {
@@ -257,7 +264,7 @@ func (c *Client) CheckTaskNamesArray(names []string) (*TakenTasks, CombinedError
 	return resp, nil
 }
 
-func (c Client) LogThroughAPI(entry LogEntry) CombinedError {
+func (c Client) LogThroughAPI(entry LogEntry) *CombinedError {
 	_, err := c.httpPost("logs/add", entry, nil)
 	return err
 }
@@ -273,7 +280,7 @@ func (c Client) issueWSTicket() (string, []error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return "", []error{fmt.Errorf("unexpected status code: %s", resp.Status)}
+		return "", []error{&UnexpectedStatusCode{Status: resp.StatusCode, StatusText: resp.Status}}
 	}
 	decoder := json.NewDecoder(resp.Body)
 	var ticketBody TicketResponse

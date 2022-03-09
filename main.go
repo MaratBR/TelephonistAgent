@@ -20,6 +20,6 @@ func main() {
 	app := CreateNewApp()
 	err := app.Run(os.Args)
 	if err != nil {
-		logger.Fatal(err.Error())
+		panic(err)
 	}
 }

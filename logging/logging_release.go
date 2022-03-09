@@ -19,7 +19,7 @@ func init() {
 	core := zapcore.NewCore(
 		zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig()),
 		w,
-		zap.InfoLevel,
+		zap.DebugLevel,
 	)
 	Root = zap.New(core)
 }

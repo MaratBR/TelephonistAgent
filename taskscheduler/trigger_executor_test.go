@@ -1,4 +1,4 @@
-package taskexecutor_test
+package taskscheduler_test
 
 import (
 	"fmt"
@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	taskexecutor "github.com/MaratBR/TelephonistAgent/task_executor"
+	"github.com/MaratBR/TelephonistAgent/taskscheduler"
 	"github.com/MaratBR/TelephonistAgent/telephonist"
 )
 
@@ -29,11 +29,10 @@ func touchFile(fileName string) {
 }
 
 func TestFSTrigger(t *testing.T) {
-	e, err := taskexecutor.NewFSTriggersExecutor()
-	var lastEvent *taskexecutor.TriggeredEvent
-	e.SetCallback(func(event taskexecutor.TriggeredEvent) {
-		lastEvent = new(taskexecutor.TriggeredEvent)
-		*lastEvent = event
+	e, err := taskscheduler.NewFSTriggersScheduler()
+	var lastEvent *taskscheduler.TriggeredEvent
+	e.SetCallback(func(event *taskscheduler.TriggeredEvent) {
+		lastEvent = event
 	})
 	if err != nil {
 		t.Error(err)

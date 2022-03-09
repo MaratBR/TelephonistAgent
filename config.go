@@ -42,5 +42,13 @@ func (cf *ConfigFile) Write(ptr interface{}) error {
 	defer f.Close()
 	encoder := json.NewEncoder(f)
 	encoder.SetIndent("", "    ")
-	return encoder.Encode(ptr)
+	err = encoder.Encode(ptr)
+	if err != nil {
+		return nil
+	}
+	offset, err := f.Seek(0, os.SEEK_CUR)
+	if err != nil {
+		return err
+	}
+	return f.Truncate(offset)
 }

@@ -10,7 +10,7 @@ clean:
 rebuild: clean build
 
 build:
-	go build -o $(OUTPUT_PATH)/$(OUTPUT_FILENAME) -tags $(TAG)			
+	go build -o $(OUTPUT_PATH)/$(OUTPUT_FILENAME) -tags $(TAG)		
 
 __set_debug:
 	$(eval TAG := debug)
@@ -26,7 +26,7 @@ run: build-debug
 test:
 	@go test 
 	@go test ./telephonist
-	@go test ./task_executor
+	@go test ./taskscheduler
 	@go test ./utils
 
 chown-directories:

@@ -46,7 +46,7 @@ type App struct {
 	instanceID        string
 	machineID         string
 	telephonistClient *telephonist.Client
-	executor          *ApplicationExecutor
+	scheduler         *ApplicationScheduler
 	configFolderPath  string
 }
 
@@ -67,6 +67,10 @@ func CreateNewApp() *App {
 	app.Usage = "Supervise multiple tasks and report all information to the Telephonist server"
 	app.After = app.after
 	app.Flags = []cli.Flag{
+		&cli.BoolFlag{
+			Name:  "restart",
+			Usage: "if set, will restart the agent if it fails",
+		},
 		&cli.BoolFlag{
 			Name:  "secure",
 			Value: false,
@@ -151,6 +155,7 @@ func (a *App) after(c *cli.Context) error {
 			return err
 		}
 	}
+	logging.Root.Sync()
 	return nil
 }
 
@@ -182,21 +187,30 @@ func (a *App) action(c *cli.Context) error {
 		return err
 	}
 
-	err = a.createExecutor()
+	err = a.createScheduler()
 	if err != nil {
 		return err
 	}
 
-	err = a.executor.Start()
+	err = a.scheduler.Start()
 	if err != nil {
 		return fmt.Errorf("failed to start executor: %s", err.Error())
 	}
 
+	server := NewServer(&ServerOptions{
+		Scheduler: a.scheduler,
+	})
+	server.Start()
+
+	// wait for interrupt
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt)
 	<-sigChan
 
-	a.executor.Stop()
+	println("\rgraceful shutdown...")
+
+	server.Stop()
+	a.scheduler.Stop()
 
 	return nil
 }
@@ -226,20 +240,36 @@ func (a *App) createTelephonistClient() error {
 	if err != nil {
 		return fmt.Errorf("failed to create a client: %s", err.Error())
 	}
+
+	err = a.telephonistClient.Probe()
+	if err != (*telephonist.CombinedError)(nil) {
+		if unexpected, ok := err.(*telephonist.UnexpectedStatusCode); ok {
+			if unexpected.Status == 401 {
+				return errors.New("authentication failed, make sure that API key is correct")
+			}
+		}
+		return err
+
+	}
+
 	return nil
 }
 
-func (a *App) createExecutor() error {
+func (a *App) createScheduler() error {
 	if a.telephonistClient == nil {
 		panic("telephonistClient is not set")
 	}
 	var err error
-	a.executor, err = NewApplicationExecutor(ApplicationExecutorOptions{
+	a.scheduler, err = NewApplicationScheduler(ApplicationSchedulerOptions{
 		ConfigPath: a.filenameHelper("executor-config.json"),
 		Client:     a.telephonistClient,
 	})
 	return err
 }
+
+//#region server
+
+//#endregion
 
 // #region Utils
 

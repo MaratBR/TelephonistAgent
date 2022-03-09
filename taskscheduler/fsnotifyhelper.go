@@ -1,4 +1,4 @@
-package taskexecutor
+package taskscheduler
 
 import "github.com/fsnotify/fsnotify"
 

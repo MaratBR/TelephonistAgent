@@ -86,8 +86,9 @@ func NewWSClient(client *Client, options WSClientOptions) *WSClient {
 		panic("client is nil")
 	}
 	return &WSClient{
-		opts:   options,
-		client: client,
+		opts:          options,
+		client:        client,
+		eventChannels: make(map[string]map[uint32]eventsChannel),
 	}
 }
 
@@ -120,6 +121,9 @@ func (c *WSClient) connect() error {
 	if errs != nil {
 		c.transitionState(StateConnecting, StateDisconnected)
 		if len(errs) == 1 {
+			if _, ok := errs[0].(*UnexpectedStatusCode); ok {
+				return errs[0]
+			}
 			return fmt.Errorf("failed to issue WS ticket: %s", errs[0].Error())
 		} else {
 			sb := strings.Builder{}
@@ -175,10 +179,12 @@ func (c *WSClient) Stop() {
 	if c.state == StateStopped {
 		return
 	}
+
 	// this will cause writePump to stop and then close WS connection
 	// which in turn will stop readPump
 	c.state = StateStopped
 	close(c.sendMessages)
+
 }
 
 func (c *WSClient) SendWebsocketMessage(messageType string, data interface{}) error {
@@ -191,6 +197,10 @@ func (c *WSClient) SendWebsocketMessage(messageType string, data interface{}) er
 
 func (c *WSClient) SendTasksSync(tasks []*DefinedTask) error {
 	return c.SendWebsocketMessage(MO_TASK_SYNC, tasks)
+}
+
+func (c *WSClient) SendLogs(logs *LogMessage) error {
+	return c.SendWebsocketMessage(MO_SEND_LOG, logs)
 }
 
 func (c *WSClient) requireState(expectedState ...ClientState) {
@@ -261,7 +271,7 @@ func (c *WSClient) writePump() {
 			var mb []byte
 			mb, err = json.Marshal(&msg)
 			if err != nil {
-				// TODO: log the error?
+				wsLogger.Error("failed to marshal message")
 				continue
 			}
 			_, err = w.Write(mb)
@@ -315,7 +325,6 @@ func (c *WSClient) onDisconnect() {
 		c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 		c.conn.Close()
 		wsLogger.Warn("connection closed")
-		close(c.sendMessages)
 		c.setState(StateDisconnected)
 	}
 }

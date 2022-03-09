@@ -1,4 +1,4 @@
-package taskexecutor
+package taskscheduler
 
 import (
 	"fmt"
@@ -24,9 +24,15 @@ type TriggeredEvent struct {
 	Params    map[string]interface{}
 }
 
-type TriggerCallback func(event TriggeredEvent)
+type TriggerCallback func(event *TriggeredEvent)
 
-type TriggersExecutor interface {
+type TriggersSchedulerInfo struct {
+	Name                string
+	AllowedTriggerTypes []string
+	Details             interface{} `json:",omitempty"`
+}
+
+type TriggersScheduler interface {
 	CanSchedule(triggerType string) bool
 	Schedule(trigger *telephonist.TaskTrigger) (uint64, error)
 	ScheduleByID(id uint64, trigger *telephonist.TaskTrigger) (uint64, error)
@@ -35,11 +41,12 @@ type TriggersExecutor interface {
 	Stop()
 	IsRunning() bool
 	SetCallback(callback TriggerCallback)
+	Explain() TriggersSchedulerInfo
 }
 
 // #region CRON
 
-type CronTriggersExecutor struct {
+type CronTriggersScheduler struct {
 	seq           uint64
 	cronScheduler *gocron.Scheduler
 	callback      TriggerCallback
@@ -47,25 +54,35 @@ type CronTriggersExecutor struct {
 	logger        *zap.Logger
 }
 
-func NewCronTriggersExecutor() *CronTriggersExecutor {
-	return &CronTriggersExecutor{
+func NewCronTriggersScheduler() *CronTriggersScheduler {
+	return &CronTriggersScheduler{
 		cronScheduler: gocron.NewScheduler(time.UTC),
 		jobs:          make(map[uint64]*gocron.Job),
-		logger:        logger.With(zap.String("struct", "CronTriggersExecutor")),
+		logger:        logger.With(zap.String("struct", "CronTriggersScheduler")),
 	}
 }
 
-func (e *CronTriggersExecutor) CanSchedule(triggerType string) bool {
+func (e *CronTriggersScheduler) Explain() TriggersSchedulerInfo {
+	return TriggersSchedulerInfo{
+		Name:                "CronTriggersScheduler",
+		AllowedTriggerTypes: []string{telephonist.TRIGGER_CRON},
+		Details: map[string]string{
+			"Uses": "github.com/go-co-op/gocron",
+		},
+	}
+}
+
+func (e *CronTriggersScheduler) CanSchedule(triggerType string) bool {
 	return triggerType == telephonist.TRIGGER_CRON
 }
 
-func (e *CronTriggersExecutor) Schedule(trigger *telephonist.TaskTrigger) (uint64, error) {
+func (e *CronTriggersScheduler) Schedule(trigger *telephonist.TaskTrigger) (uint64, error) {
 	return e.ScheduleByID(trigger.GetID(), trigger)
 }
 
-func (e *CronTriggersExecutor) ScheduleByID(id uint64, trigger *telephonist.TaskTrigger) (uint64, error) {
+func (e *CronTriggersScheduler) ScheduleByID(id uint64, trigger *telephonist.TaskTrigger) (uint64, error) {
 	if trigger.Name != telephonist.TRIGGER_CRON {
-		panic("invalid trigger type for a CronTriggersExecutor")
+		panic("invalid trigger type for a CronTriggersScheduler")
 	}
 	job, err := e.cronScheduler.Cron(trigger.MustString()).Do(e.trigger, id, trigger)
 	if err != nil {
@@ -75,13 +92,13 @@ func (e *CronTriggersExecutor) ScheduleByID(id uint64, trigger *telephonist.Task
 	return id, nil
 }
 
-func (e *CronTriggersExecutor) trigger(id uint64, t *telephonist.TaskTrigger) {
+func (e *CronTriggersScheduler) trigger(id uint64, t *telephonist.TaskTrigger) {
 	if e.callback != nil {
-		e.callback(TriggeredEvent{TriggerID: id, Trigger: t})
+		e.callback(&TriggeredEvent{TriggerID: id, Trigger: t})
 	}
 }
 
-func (e *CronTriggersExecutor) Unschedule(id uint64) (error, bool) {
+func (e *CronTriggersScheduler) Unschedule(id uint64) (error, bool) {
 	job, ok := e.jobs[id]
 	if ok {
 		e.cronScheduler.RemoveByReference(job)
@@ -89,20 +106,20 @@ func (e *CronTriggersExecutor) Unschedule(id uint64) (error, bool) {
 	return nil, ok
 }
 
-func (e *CronTriggersExecutor) Start() error {
+func (e *CronTriggersScheduler) Start() error {
 	e.cronScheduler.StartAsync()
 	return nil
 }
 
-func (e *CronTriggersExecutor) Stop() {
+func (e *CronTriggersScheduler) Stop() {
 	e.cronScheduler.Stop()
 }
 
-func (e *CronTriggersExecutor) IsRunning() bool {
+func (e *CronTriggersScheduler) IsRunning() bool {
 	return e.cronScheduler.IsRunning()
 }
 
-func (e *CronTriggersExecutor) SetCallback(callback TriggerCallback) {
+func (e *CronTriggersScheduler) SetCallback(callback TriggerCallback) {
 	e.callback = callback
 }
 
@@ -110,7 +127,7 @@ func (e *CronTriggersExecutor) SetCallback(callback TriggerCallback) {
 
 // #region fnotify
 
-type FSTriggersExecutor struct {
+type FSTriggersScheduler struct {
 	watcher      *fsnotify.Watcher
 	pathTriggers map[string]map[uint64]*telephonist.TaskTrigger
 	triggers     map[uint64]*telephonist.TaskTrigger
@@ -121,32 +138,42 @@ type FSTriggersExecutor struct {
 	closeChan chan struct{}
 }
 
-func NewFSTriggersExecutor() (*FSTriggersExecutor, error) {
+func NewFSTriggersScheduler() (*FSTriggersScheduler, error) {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, err
 	}
-	return &FSTriggersExecutor{
+	return &FSTriggersScheduler{
 		watcher:      watcher,
 		pathTriggers: make(map[string]map[uint64]*telephonist.TaskTrigger),
 		triggers:     make(map[uint64]*telephonist.TaskTrigger),
-		logger:       logger.With(zap.String("struct", "FSTriggersExecutor")),
+		logger:       logger.With(zap.String("struct", "FSTriggersScheduler")),
 	}, nil
 }
 
-func (e *FSTriggersExecutor) CanSchedule(triggerType string) bool {
+func (e *FSTriggersScheduler) Explain() TriggersSchedulerInfo {
+	return TriggersSchedulerInfo{
+		Name:                "FSTriggersScheduler",
+		AllowedTriggerTypes: []string{telephonist.TRIGGER_FSNOTIFY},
+		Details: map[string]string{
+			"Uses": "github.com/fsnotify/fsnotify",
+		},
+	}
+}
+
+func (e *FSTriggersScheduler) CanSchedule(triggerType string) bool {
 	return triggerType == telephonist.TRIGGER_FSNOTIFY
 }
 
-func (e *FSTriggersExecutor) Schedule(trigger *telephonist.TaskTrigger) (uint64, error) {
+func (e *FSTriggersScheduler) Schedule(trigger *telephonist.TaskTrigger) (uint64, error) {
 	return e.ScheduleByID(trigger.GetID(), trigger)
 }
 
-func (e *FSTriggersExecutor) ScheduleByID(id uint64, trigger *telephonist.TaskTrigger) (uint64, error) {
+func (e *FSTriggersScheduler) ScheduleByID(id uint64, trigger *telephonist.TaskTrigger) (uint64, error) {
 	if trigger.Name != telephonist.TRIGGER_FSNOTIFY {
-		panic("invalid trigger type for a FSTriggersExecutor")
+		panic("invalid trigger type for a FSTriggersScheduler")
 	}
-	path := trigger.MustString()
+	path := normalizePath(trigger.MustString())
 	if pt, ok := e.pathTriggers[path]; ok {
 		pt[id] = trigger
 	} else {
@@ -160,7 +187,7 @@ func (e *FSTriggersExecutor) ScheduleByID(id uint64, trigger *telephonist.TaskTr
 	return id, nil
 }
 
-func (e *FSTriggersExecutor) Unschedule(id uint64) (error, bool) {
+func (e *FSTriggersScheduler) Unschedule(id uint64) (error, bool) {
 	trigger, exists := e.triggers[id]
 	if exists {
 		path := trigger.MustString()
@@ -186,7 +213,7 @@ func (e *FSTriggersExecutor) Unschedule(id uint64) (error, bool) {
 	return nil, exists
 }
 
-func (e *FSTriggersExecutor) Start() error {
+func (e *FSTriggersScheduler) Start() error {
 	if e.isRunning {
 		return nil
 	}
@@ -196,7 +223,7 @@ func (e *FSTriggersExecutor) Start() error {
 	return nil
 }
 
-func (e *FSTriggersExecutor) start() {
+func (e *FSTriggersScheduler) start() {
 	for {
 		select {
 		case event := <-e.watcher.Events:
@@ -212,7 +239,7 @@ func (e *FSTriggersExecutor) start() {
 	}
 }
 
-func (e *FSTriggersExecutor) dispatchEvent(event fsnotify.Event) {
+func (e *FSTriggersScheduler) dispatchEvent(event fsnotify.Event) {
 	if e.callback == nil {
 		return
 	}
@@ -220,24 +247,35 @@ func (e *FSTriggersExecutor) dispatchEvent(event fsnotify.Event) {
 	if err != nil {
 		return
 	}
+	logger.Debug(
+		"handling fs event",
+		zap.String("path", path),
+	)
 
-	if triggers, exists := e.pathTriggers[path]; exists {
-		for id, trigger := range triggers {
-			e.callback(TriggeredEvent{TriggerID: id, Trigger: trigger})
+	metaData := map[string]interface{}{
+		"FILEPATH":    path,
+		"FSNOTIFY_OP": event.Op.String(),
+	}
+
+	for rootPath, triggers := range e.pathTriggers {
+		if matchesPath(rootPath, path) {
+			for id, trigger := range triggers {
+				e.callback(&TriggeredEvent{TriggerID: id, Trigger: trigger, Params: metaData})
+			}
 		}
 	}
 }
 
-func (e *FSTriggersExecutor) Stop() {
+func (e *FSTriggersScheduler) Stop() {
 	e.isRunning = false
 	e.watcher.Close()
 }
 
-func (e *FSTriggersExecutor) IsRunning() bool {
+func (e *FSTriggersScheduler) IsRunning() bool {
 	return e.isRunning
 }
 
-func (e *FSTriggersExecutor) SetCallback(callback TriggerCallback) {
+func (e *FSTriggersScheduler) SetCallback(callback TriggerCallback) {
 	e.callback = callback
 }
 
@@ -245,7 +283,7 @@ func (e *FSTriggersExecutor) SetCallback(callback TriggerCallback) {
 
 // #region Telephonist API
 
-type TelephonistExecutor struct {
+type TelephonistScheduler struct {
 	client                *telephonist.WSClient
 	seq                   uint64
 	queue                 *telephonist.EventQueue
@@ -256,30 +294,37 @@ type TelephonistExecutor struct {
 	logger                *zap.Logger
 }
 
-func NewTelephonistExecutor(client *telephonist.WSClient) *TelephonistExecutor {
+func NewTelephonistScheduler(client *telephonist.WSClient) *TelephonistScheduler {
 	if client == nil {
 		panic("client is nil")
 	}
-	return &TelephonistExecutor{
+	return &TelephonistScheduler{
 		client:                client,
 		subscriptionsCounters: make(map[string]int),
 		eventTriggers:         make(map[string]map[uint64]*telephonist.TaskTrigger),
 		triggers:              make(map[uint64]*telephonist.TaskTrigger),
-		logger:                logger.With(zap.String("struct", "TelephonistExecutor")),
+		logger:                logger.With(zap.String("struct", "TelephonistScheduler")),
 	}
 }
 
-func (e *TelephonistExecutor) CanSchedule(triggerType string) bool {
+func (e *TelephonistScheduler) Explain() TriggersSchedulerInfo {
+	return TriggersSchedulerInfo{
+		Name:                "TelephonistScheduler",
+		AllowedTriggerTypes: []string{telephonist.TRIGGER_EVENT},
+	}
+}
+
+func (e *TelephonistScheduler) CanSchedule(triggerType string) bool {
 	return triggerType == telephonist.TRIGGER_EVENT
 }
 
-func (e *TelephonistExecutor) Schedule(trigger *telephonist.TaskTrigger) (uint64, error) {
+func (e *TelephonistScheduler) Schedule(trigger *telephonist.TaskTrigger) (uint64, error) {
 	return e.ScheduleByID(trigger.GetID(), trigger)
 }
 
-func (e *TelephonistExecutor) ScheduleByID(id uint64, trigger *telephonist.TaskTrigger) (uint64, error) {
+func (e *TelephonistScheduler) ScheduleByID(id uint64, trigger *telephonist.TaskTrigger) (uint64, error) {
 	if trigger.Name != telephonist.TRIGGER_EVENT {
-		panic("invalid trigger type for a TelephonistExecutor")
+		panic("invalid trigger type for a TelephonistScheduler")
 	}
 	event := trigger.MustString()
 	e.triggers[id] = trigger
@@ -292,7 +337,7 @@ func (e *TelephonistExecutor) ScheduleByID(id uint64, trigger *telephonist.TaskT
 	return id, nil
 }
 
-func (e *TelephonistExecutor) Unschedule(id uint64) (error, bool) {
+func (e *TelephonistScheduler) Unschedule(id uint64) (error, bool) {
 	trigger, exists := e.triggers[id]
 	if exists {
 		delete(e.triggers, id)
@@ -308,14 +353,14 @@ func (e *TelephonistExecutor) Unschedule(id uint64) (error, bool) {
 	return nil, exists
 }
 
-func (e *TelephonistExecutor) Start() error {
+func (e *TelephonistScheduler) Start() error {
 	if e.queue == nil {
 		e.queue = e.client.NewQueue()
 	}
 	return nil
 }
 
-func (e *TelephonistExecutor) start() {
+func (e *TelephonistScheduler) start() {
 	for {
 		event, ok := <-e.queue.Channel
 		if !ok {
@@ -327,55 +372,90 @@ func (e *TelephonistExecutor) start() {
 				continue
 			}
 			for id, trigger := range triggers {
-				e.callback(TriggeredEvent{TriggerID: id, Trigger: trigger})
+				e.callback(&TriggeredEvent{TriggerID: id, Trigger: trigger})
 			}
 		}
 	}
 }
 
-func (e *TelephonistExecutor) Stop() {
+func (e *TelephonistScheduler) Stop() {
 	if e.queue != nil {
 		e.queue.UnsubscribeAll()
 		e.queue = nil
 	}
 }
 
-func (e *TelephonistExecutor) IsRunning() bool {
+func (e *TelephonistScheduler) IsRunning() bool {
 	return e.queue != nil
 }
 
-func (e *TelephonistExecutor) SetCallback(callback TriggerCallback) {
+func (e *TelephonistScheduler) SetCallback(callback TriggerCallback) {
 	e.callback = callback
 }
 
 // #endregion
 
-type CompositeExecutorError struct {
+type CompositeSchedulerError struct {
 	MainError      error
 	RollbackErrors []error
 }
 
-func (err *CompositeExecutorError) Error() string {
+func (err *CompositeSchedulerError) Error() string {
 	return err.MainError.Error()
 }
 
-type CompositeTriggersExecutor struct {
-	executors         []TriggersExecutor
+type CompositeTriggersScheduler struct {
+	childSchedulers   []TriggersScheduler
 	executorIndexBits uint8
 	isRunning         bool
 	logger            *zap.Logger
+	ids               map[uint64]int
 }
 
-func NewCompositeTriggersExecutor(executors ...TriggersExecutor) *CompositeTriggersExecutor {
-	return &CompositeTriggersExecutor{
-		executors:         executors,
+func NewCompositeTriggersScheduler(executors ...TriggersScheduler) *CompositeTriggersScheduler {
+	return &CompositeTriggersScheduler{
+		childSchedulers:   executors,
 		executorIndexBits: uint8(math.Ceil(math.Log2(float64(len(executors))))),
-		logger:            logger.With(zap.String("struct", "CompositeTriggersExecutor")),
+		logger:            logger.With(zap.String("struct", "CompositeTriggersScheduler")),
+		ids:               make(map[uint64]int),
 	}
 }
 
-func (e *CompositeTriggersExecutor) CanSchedule(triggerType string) bool {
-	for _, executor := range e.executors {
+func contains(s []string, e string) bool {
+	for _, a := range s {
+		if a == e {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *CompositeTriggersScheduler) Explain() TriggersSchedulerInfo {
+	underlyingSchedulers := []TriggersSchedulerInfo{}
+	allowedTriggerTypes := []string{}
+
+	for _, scheduler := range e.childSchedulers {
+		info := scheduler.Explain()
+		underlyingSchedulers = append(underlyingSchedulers, info)
+
+		for _, triggerType := range info.AllowedTriggerTypes {
+			if !contains(allowedTriggerTypes, triggerType) {
+				allowedTriggerTypes = append(allowedTriggerTypes, triggerType)
+			}
+		}
+	}
+
+	return TriggersSchedulerInfo{
+		Name:                "CompositeTriggersScheduler",
+		AllowedTriggerTypes: allowedTriggerTypes,
+		Details: map[string]interface{}{
+			"Children": underlyingSchedulers,
+		},
+	}
+}
+
+func (e *CompositeTriggersScheduler) CanSchedule(triggerType string) bool {
+	for _, executor := range e.childSchedulers {
 		if executor.CanSchedule(triggerType) {
 			return true
 		}
@@ -383,13 +463,14 @@ func (e *CompositeTriggersExecutor) CanSchedule(triggerType string) bool {
 	return false
 }
 
-func (e *CompositeTriggersExecutor) ScheduleByID(id uint64, trigger *telephonist.TaskTrigger) (uint64, error) {
-	for _, executor := range e.executors {
+func (e *CompositeTriggersScheduler) ScheduleByID(id uint64, trigger *telephonist.TaskTrigger) (uint64, error) {
+	for index, executor := range e.childSchedulers {
 		if executor.CanSchedule(trigger.Name) {
 			id, err := executor.ScheduleByID(id, trigger)
 			if err != nil {
 				return 0, err
 			}
+			e.ids[id] = index
 			return id, err
 		}
 	}
@@ -397,8 +478,8 @@ func (e *CompositeTriggersExecutor) ScheduleByID(id uint64, trigger *telephonist
 	return 0, fmt.Errorf("there's no executors that match given trigger type %s", trigger.Name)
 }
 
-func (e *CompositeTriggersExecutor) Schedule(trigger *telephonist.TaskTrigger) (uint64, error) {
-	for index, executor := range e.executors {
+func (e *CompositeTriggersScheduler) Schedule(trigger *telephonist.TaskTrigger) (uint64, error) {
+	for index, executor := range e.childSchedulers {
 		if executor.CanSchedule(trigger.Name) {
 			id, err := executor.Schedule(trigger)
 			if err != nil {
@@ -412,28 +493,27 @@ func (e *CompositeTriggersExecutor) Schedule(trigger *telephonist.TaskTrigger) (
 	return 0, fmt.Errorf("there's no executors that match given trigger type %s", trigger.Name)
 }
 
-func (e *CompositeTriggersExecutor) Unschedule(id uint64) (error, bool) {
-	// zeroes first N bits
-	originalID := id & ^(((1 << e.executorIndexBits) - 1) << (64 - e.executorIndexBits))
-	// gets first N bits as number
-	index := id >> (64 - e.executorIndexBits)
-	return e.executors[index].Unschedule(originalID)
+func (e *CompositeTriggersScheduler) Unschedule(id uint64) (error, bool) {
+	if execIndex, ok := e.ids[id]; ok {
+		return e.childSchedulers[execIndex].Unschedule(id)
+	}
+	return fmt.Errorf("trigger with id %d is not registered in any of the underlying schedulers", id), false
 }
 
-func (e *CompositeTriggersExecutor) Start() error {
+func (e *CompositeTriggersScheduler) Start() error {
 	if e.isRunning {
 		return nil
 	}
 	var err error
 	var i int
-	for i = 0; i < len(e.executors) && err == nil; i++ {
-		err = e.executors[i].Start()
+	for i = 0; i < len(e.childSchedulers) && err == nil; i++ {
+		err = e.childSchedulers[i].Start()
 	}
 	if err != nil {
 		e.logger.Error("Failed to start executore because one of the child executors failed to start")
 		// stop already running executors
 		for j := 0; j <= i; j++ {
-			e.executors[i].Stop()
+			e.childSchedulers[i].Stop()
 		}
 		return err
 	}
@@ -441,23 +521,23 @@ func (e *CompositeTriggersExecutor) Start() error {
 	return nil
 }
 
-func (e *CompositeTriggersExecutor) Stop() {
+func (e *CompositeTriggersScheduler) Stop() {
 	if !e.isRunning {
 		return
 	}
-	for _, executor := range e.executors {
+	for _, executor := range e.childSchedulers {
 
 		executor.Stop()
 	}
 	e.isRunning = false
 }
 
-func (e *CompositeTriggersExecutor) IsRunning() bool {
+func (e *CompositeTriggersScheduler) IsRunning() bool {
 	return e.isRunning
 }
 
-func (e *CompositeTriggersExecutor) SetCallback(callback TriggerCallback) {
-	for _, executor := range e.executors {
+func (e *CompositeTriggersScheduler) SetCallback(callback TriggerCallback) {
+	for _, executor := range e.childSchedulers {
 		executor.SetCallback(callback)
 	}
 }

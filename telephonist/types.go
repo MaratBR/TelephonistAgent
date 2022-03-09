@@ -34,7 +34,6 @@ type ApplicationView struct {
 }
 
 type CreateSequenceRequest struct {
-	RelatedTask string                 `json:"related_task"`
 	CustomName  *string                `json:"custom_name"`
 	Description *string                `json:"description"`
 	Meta        map[string]interface{} `json:"meta"`
@@ -113,12 +112,16 @@ const (
 	TASK_TYPE_ARBITRARY = "arbitrary"
 )
 
+type TaskBody struct {
+	Value json.RawMessage `json:"value"`
+	Type  string          `json:"type" validate:"oneof=exec script arbitrary"`
+}
+
 type DefineTaskRequest struct {
 	ID          uuid.UUID         `json:"_id"`
 	Name        string            `json:"name"`
 	Description *string           `json:"description,omitempty"`
-	Type        string            `json:"task_type,omitempty" validate:"oneof=exec script arbitrary"`
-	Body        interface{}       `json:"body,omitempty"`
+	Body        TaskBody          `json:"body"`
 	Env         map[string]string `json:"env,omitempty"`
 	Tags        []string          `json:"tags,omitempty"`
 	Triggers    []TaskTrigger     `json:"triggers,omitempty" validate:"dive,validate_self"`
@@ -127,14 +130,26 @@ type DefineTaskRequest struct {
 type DefinedTask struct {
 	Name        string            `json:"name"`
 	Description string            `json:"description"`
-	Type        string            `json:"task_type" validate:"oneof=exec script arbitrary"`
-	Body        interface{}       `json:"body"`
+	Body        TaskBody          `json:"body"`
 	Env         map[string]string `json:"env"`
 	Tags        []string          `json:"tags"`
 	Triggers    []*TaskTrigger    `json:"triggers" validate:"dive,required"`
 	ID          uuid.UUID         `json:"_id"`
 	LastUpdated time.Time         `json:"last_updated"`
 	Disabled    bool              `json:"disabled,omitempty"`
+}
+
+func (t *DefinedTask) UnmarshalBody(v interface{}) error {
+	return json.Unmarshal(t.Body.Value, v)
+}
+
+func (t *DefinedTask) MustString() string {
+	var s string
+	err := t.UnmarshalBody(&s)
+	if err != nil {
+		panic(t)
+	}
+	return s
 }
 
 type TaskSyncResponse struct {
@@ -202,8 +217,8 @@ type EventData struct {
 }
 
 type oRawMessage struct {
-	MessageType string      `json:"msg_type"`
-	Data        interface{} `json:"data"`
+	MessageType string      `json:"t"`
+	Data        interface{} `json:"d"`
 }
 
 type iRawMesage struct {
@@ -233,4 +248,15 @@ type IntroductionData struct {
 type TasksIncomingMessage struct {
 	Tasks  []*DefinedTask       `json:"tasks"`
 	Errors map[uuid.UUID]string `json:"errors"`
+}
+
+type LogRecord struct {
+	Time     time.Time   `json:"t"`
+	Severity LogSeverity `json:"severity"`
+	Body     interface{} `json:"body"`
+}
+
+type LogMessage struct {
+	SequenceID string      `json:"sequence_id"`
+	Logs       []LogRecord `json:"logs"`
 }

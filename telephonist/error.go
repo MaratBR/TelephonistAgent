@@ -1,16 +1,21 @@
 package telephonist
 
 import (
-	"strconv"
 	"strings"
 )
 
-type CombinedError []error
+type CombinedError struct {
+	Errors []error
+}
 
-func (err CombinedError) Error() string {
+func (err *CombinedError) Error() string {
+	if len(err.Errors) == 1 {
+		return err.Errors[0].Error()
+	}
 	sb := strings.Builder{}
+
 	sb.WriteString("Multiple errors occured:")
-	for _, innerError := range err {
+	for _, innerError := range err.Errors {
 		sb.WriteString("\n\t")
 		sb.WriteString(innerError.Error())
 	}
@@ -18,8 +23,11 @@ func (err CombinedError) Error() string {
 }
 
 func ExtractCombined(err error) ([]error, bool) {
-	c, ok := err.(CombinedError)
-	return c, ok
+	c, ok := err.(*CombinedError)
+	if ok {
+		return c.Errors, true
+	}
+	return nil, false
 }
 
 func IsCombinedError(err error) bool {
@@ -28,8 +36,8 @@ func IsCombinedError(err error) bool {
 }
 
 func MustExtractCombined(err error) []error {
-	c := err.(CombinedError)
-	return c
+	c := err.(*CombinedError)
+	return c.Errors
 }
 
 type UnexpectedStatusCode struct {
@@ -37,6 +45,6 @@ type UnexpectedStatusCode struct {
 	StatusText string
 }
 
-func (err UnexpectedStatusCode) Error() string {
-	return "Unexpected status code: " + strconv.Itoa(err.Status) + " " + err.StatusText
+func (err *UnexpectedStatusCode) Error() string {
+	return "Unexpected status code: " + err.StatusText
 }
