@@ -87,6 +87,7 @@ outer:
 }
 
 func (buf *OutputBuffer) Write(data []byte, isStderr bool) (int, error) {
+	length := len(data)
 	var w bytes.Buffer
 	if isStderr {
 		w = buf.stderr
@@ -125,5 +126,5 @@ func (buf *OutputBuffer) Write(data []byte, isStderr bool) (int, error) {
 		buf.Flush()
 	}
 
-	return len(data), nil
+	return length, nil
 }

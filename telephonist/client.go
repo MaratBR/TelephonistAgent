@@ -21,6 +21,7 @@ var (
 	ErrLogWorkerIsAlreadyRunning = errors.New("log worker is already running")
 	ErrClientIsNotConnected      = errors.New("client is not connected")
 	ErrCloseMessage              = errors.New("CloseMessage received")
+	ErrCodeIsInvalid             = errors.New("registration code is invalid")
 
 	apiLogger = logging.ChildLogger("telephonist-api")
 )
@@ -59,17 +60,6 @@ type ClientOptions struct {
 	URL    *url.URL `validate:"required"`
 }
 
-type ClientPersistentState struct {
-	BoundSequences []string
-}
-
-func newPersistentState() *ClientPersistentState {
-	return &ClientPersistentState{
-		BoundSequences: []string{},
-	}
-}
-
-type OnPersistStateCallback func(state *ClientPersistentState) error
 type OnEventCallback func(event Event) error
 type eventsChannel chan Event
 
@@ -82,9 +72,6 @@ type Client struct {
 func NewClient(options ClientOptions) (*Client, error) {
 	if options.URL == nil {
 		return nil, errors.New("URL is required")
-	}
-	if options.APIKey == "" {
-		return nil, errors.New("APIKey is required")
 	}
 	if options.URL.Scheme != "http" && options.URL.Scheme != "https" {
 		return nil, errors.New("schema must be http or https")
@@ -147,7 +134,7 @@ func (c *Client) delete(path string) *CombinedError {
 	return nil
 }
 
-func (c *Client) get(path string, response interface{}) *CombinedError {
+func (c *Client) get(path string, response interface{}) error {
 	req := gorequest.New().Get(c.getUrl(path).String()).Set(_AUTHORIZATION, "Bearer "+c.opts.APIKey)
 
 	var resp gorequest.Response
@@ -169,7 +156,8 @@ func (c *Client) get(path string, response interface{}) *CombinedError {
 func (c *Client) getUrl(sUrl string) *url.URL {
 	u := new(url.URL)
 	*u = *c.opts.URL
-	u.Path = path.Join(u.Path, "application-api", sUrl)
+	u.Path = path.Join(u.Path, "api/application-v1", sUrl)
+	println(u.String())
 	return u
 }
 
@@ -177,8 +165,33 @@ func (c *Client) getUrl(sUrl string) *url.URL {
 
 // #region REST API
 
-func (c *Client) Probe() *CombinedError {
+func (c *Client) Probe() error {
 	return c.get("probe", nil)
+}
+
+func (c *Client) SubmitCodeRegistration(code string, createApplication *CreateApplicationRequest) (CodeRegistrationCompleted, error) {
+	var d CodeRegistrationCompleted
+	if createApplication == nil {
+		panic("createApplication argument is nil")
+	}
+	u := c.getUrl("cr")
+	{
+		query := u.Query()
+		query.Add("code", code)
+		u.RawQuery = query.Encode()
+	}
+	resp, _, errs := gorequest.New().Post(u.String()).SendStruct(createApplication).EndStruct(&d)
+	if len(errs) != 0 {
+		return d, &CombinedError{Errors: errs}
+	}
+	if resp != nil && resp.StatusCode != 200 && resp.StatusCode != 201 {
+		if resp.StatusCode == 401 {
+			return d, ErrCodeIsInvalid
+		}
+		return d, &CombinedError{Errors: []error{&UnexpectedStatusCode{Status: resp.StatusCode, StatusText: resp.Status}}}
+	}
+
+	return d, nil
 }
 
 func (c *Client) Publish(event EventData) *CombinedError {
@@ -235,7 +248,7 @@ func (c Client) DropTask(taskID uuid.UUID) *CombinedError {
 	return c.delete("defined-tasks/" + taskID.String())
 }
 
-func (c Client) GetTasks() ([]TaskView, *CombinedError) {
+func (c Client) GetTasks() ([]TaskView, error) {
 	tasks := make([]TaskView, 0)
 	err := c.get("defined-tasks", tasks)
 	if err != nil {

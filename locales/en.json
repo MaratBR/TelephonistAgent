@@ -1,0 +1,39 @@
+{
+    "Name": "Name",
+    "TryRunInit": "Try to run interactive initilization",
+    "DisplayNameOrEmpty": "Display name (can be empty)",
+    "Tags": "Tags (comma-separated)",
+    "PleaseGoToCR": "Please open %s in you browser and paste the code you see",
+    "DomainNameNote": "Please note that domain name may differ, Telephonist UI and Telephonist (server) can have different domain names if they're deployed separately",
+    "ApiUrlMissing": "API URL is missing in the configuration",
+    "ApiUrlIs": "API URL is %s",
+    "InputNewUrlOrEmpty": "Input new url or just press <Enter> to keep it unchanged",
+    "EnterApiUrl": "Enter API URL",
+    "KeyMissing": "Application token is missing in the configuration",
+    "WantCR": "Would you like to do a code registration, we can register this agent in your Telephonist server right now?",
+    "YN": "[y/n]",
+    "Y": "y,+,yes",
+    "N": "n,-,no",
+    "InvalidURL": "Invalid URL: %s",
+    "FailedToConnectToTheServer": "Failed to connect to the server: %s",
+    "KeyIs": "Application key is %s",
+    "InputKey": "Input applicatin access key",
+    "InputNewKeyOrEmpty": "Input new application key or press <Enter> to keep it unchanged",
+    "FinalConfigIs": "Final config is:",
+    "IsThatOkay": "Is that okay?",
+    "FailedToWriteConfig": "Failed to write config: %s",
+    "CLI": {
+        "Flag": {
+            "Restart": "if set, will restart the agent if it fails",
+            "Secure": "if set connects to API using https and wss (enforces HTTPS event if url is set to http://...)",
+            "Verbose": "",
+            "ConfigFolderPath": ""
+        },
+        "Actions": {
+            "Init": "initialize application",
+            "RefetchConfig": "",
+            "Info": "",
+            "Main": ""
+        }
+    }
+}

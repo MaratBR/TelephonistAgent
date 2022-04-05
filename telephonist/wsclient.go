@@ -60,7 +60,7 @@ type WSClientOptions struct {
 	CompatibilityKey       string
 	InstanceID             uuid.UUID
 	MachineID              string
-	OnPersistState         OnPersistStateCallback
+	ConnectionID           uuid.UUID
 	OnTask                 TaskAddedCallback
 	OnTasks                TasksUpdatedCallback
 	OnTaskRemoved          TaskRemovedCallback
@@ -74,7 +74,7 @@ type WSClient struct {
 	sendMessages     chan oRawMessage
 	state            ClientState
 	userAgent        string
-	connectionID     uuid.UUID
+	ConnectionID     uuid.UUID
 	eventChannels    map[string]map[uint32]eventsChannel
 	eventChannelsSeq uint32
 	lastError        error
@@ -85,10 +85,15 @@ func NewWSClient(client *Client, options WSClientOptions) *WSClient {
 	if client == nil {
 		panic("client is nil")
 	}
+	connectionID := options.ConnectionID
+	if uuid.Nil == connectionID {
+		connectionID = uuid.New()
+	}
 	return &WSClient{
 		opts:          options,
 		client:        client,
 		eventChannels: make(map[string]map[uint32]eventsChannel),
+		ConnectionID:  connectionID,
 	}
 }
 
@@ -101,7 +106,11 @@ func (c *WSClient) IsStarted() bool {
 }
 
 func (c *WSClient) IsConnected() bool {
-	return c.state != StateConnected
+	return c.state == StateConnected
+}
+
+func (c *WSClient) GetLastError() error {
+	return c.lastError
 }
 
 func (c *WSClient) StartAsync() {
@@ -240,7 +249,7 @@ func (c *WSClient) getWebsocketURL(prefix, ticket string) *url.URL {
 	if prefix != "" && prefix[0] == '/' {
 		prefix = prefix[1:]
 	}
-	u.Path = "_ws/application-api/" + prefix
+	u.Path = "_ws/application/" + prefix
 	u.RawQuery = "ticket=" + ticket
 	return u
 }
@@ -428,7 +437,7 @@ func (c *WSClient) onIntroduction(d IntroductionData) {
 		CompatibilityKey:  c.opts.CompatibilityKey,
 		InstanceID:        c.opts.InstanceID,
 		MachineID:         c.opts.MachineID,
-		ConnectionUUID:    c.connectionID,
+		ConnectionUUID:    c.ConnectionID,
 	}
 	c.sendMessages <- oRawMessage{
 		MessageType: "hello",

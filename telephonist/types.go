@@ -34,10 +34,11 @@ type ApplicationView struct {
 }
 
 type CreateSequenceRequest struct {
-	CustomName  *string                `json:"custom_name"`
-	Description *string                `json:"description"`
-	Meta        map[string]interface{} `json:"meta"`
-	TaskID      uuid.UUID              `json:"task_id"`
+	CustomName   *string                `json:"custom_name"`
+	Description  *string                `json:"description"`
+	Meta         map[string]interface{} `json:"meta"`
+	TaskID       uuid.UUID              `json:"task_id"`
+	ConnectionID uuid.UUID              `json:"connection_id"`
 }
 
 const (
@@ -222,8 +223,8 @@ type oRawMessage struct {
 }
 
 type iRawMesage struct {
-	MessageType string          `json:"msg_type"`
-	Data        json.RawMessage `json:"data"`
+	MessageType string          `json:"t"`
+	Data        json.RawMessage `json:"d"`
 }
 
 type HelloMessage struct {
@@ -259,4 +260,16 @@ type LogRecord struct {
 type LogMessage struct {
 	SequenceID string      `json:"sequence_id"`
 	Logs       []LogRecord `json:"logs"`
+}
+
+type CreateApplicationRequest struct {
+	Name        string   `json:"name"`
+	Description *string  `json:"description"`
+	DisplayName *string  `json:"display_name"`
+	Tags        []string `json:"tags"`
+}
+
+type CodeRegistrationCompleted struct {
+	Key string `json:"key"`
+	ID  string `json:"_id"`
 }

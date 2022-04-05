@@ -22,6 +22,7 @@ type ApplicationScheduler struct {
 	config        *ExecutorConfigFile
 	configPath    string
 	triggerEvents chan taskscheduler.TaskTriggeredEvent
+	InstanceID    uuid.UUID
 }
 
 type ApplicationSchedulerOptions struct {
@@ -37,6 +38,7 @@ func NewApplicationScheduler(options ApplicationSchedulerOptions) (*ApplicationS
 		executor:      taskexecutor.NewShellExecutor(),
 		triggerEvents: make(chan taskscheduler.TaskTriggeredEvent),
 	}
+	e.InstanceID = e.getOrSetInstanceID()
 	return e, nil
 }
 
@@ -53,7 +55,8 @@ func (e *ApplicationScheduler) Start() error {
 		OnTask:        e.onTask,
 		OnTaskRemoved: e.onTaskRemoved,
 		OnTasks:       e.onTasks,
-		InstanceID:    e.getOrSetInstanceID(),
+		InstanceID:    e.InstanceID,
+		ConnectionID:  uuid.NewSHA1(e.InstanceID, []byte("connection_id")),
 		OnConnected:   e.onConnected,
 	})
 	e.wsc.StartAsync()
@@ -76,16 +79,17 @@ func (e *ApplicationScheduler) onConnected() {
 func (e *ApplicationScheduler) getOrSetInstanceID() uuid.UUID {
 	var u uuid.UUID
 
-	path := filepath.Join(filepath.Base(e.configPath), ".telephonist-instance-id")
+	path := filepath.Join(filepath.Dir(e.configPath), ".telephonist-instance-id")
 	if data, err := os.ReadFile(path); err == nil {
 		u, err = uuid.Parse(string(data))
 		if err != nil {
 			u = uuid.New()
+			os.WriteFile(path, []byte(u.String()), os.ModePerm)
 		}
 	} else {
 		u = uuid.New()
 		if os.IsNotExist(err) {
-			os.WriteFile(path, []byte(path), os.ModePerm)
+			os.WriteFile(path, []byte(u.String()), os.ModePerm)
 		}
 	}
 
@@ -144,9 +148,10 @@ func (e *ApplicationScheduler) executeTask(event taskscheduler.TaskTriggeredEven
 
 	{
 		seq, err := e.client.CreateSequence(telephonist.CreateSequenceRequest{
-			TaskID:      event.Task.ID,
-			Description: nil,
-			Meta:        map[string]interface{}{},
+			TaskID:       event.Task.ID,
+			Description:  nil,
+			Meta:         map[string]interface{}{},
+			ConnectionID: e.wsc.ConnectionID,
 		})
 		if err != nil {
 			return err

@@ -1,6 +1,7 @@
 package main
 
 import (
+	_ "embed"
 	"os"
 	"time"
 

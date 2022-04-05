@@ -9,7 +9,10 @@ clean:
 
 rebuild: clean build
 
-build:
+generate:
+	go generate ./locales
+
+build: generate
 	go build -o $(OUTPUT_PATH)/$(OUTPUT_FILENAME) -tags $(TAG)		
 
 __set_debug:

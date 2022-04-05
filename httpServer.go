@@ -37,6 +37,24 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	encoder.SetIndent("", "  ")
 	w.Header().Add("content-type", "application/json")
 
+	clientInfo := map[string]interface{}{}
+
+	if s.scheduler.wsc == nil {
+		clientInfo["HasWSC"] = false
+	} else {
+		clientInfo["HasWSC"] = true
+		clientInfo["ConnectionID"] = s.scheduler.wsc.ConnectionID
+		clientInfo["InstanceID"] = s.scheduler.InstanceID
+		clientInfo["IsConnected"] = s.scheduler.wsc.IsConnected()
+		clientInfo["IsStarted"] = s.scheduler.wsc.IsStarted()
+		lastError := s.scheduler.wsc.GetLastError()
+		if lastError == nil {
+			clientInfo["WSC_LastError"] = lastError
+		} else {
+			clientInfo["WSC_LastError"] = lastError.Error()
+		}
+	}
+
 	data := map[string]interface{}{
 		"Config": map[string]interface{}{
 			"Path":  s.scheduler.config.file.filepath,
@@ -44,6 +62,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		},
 		"Executor":      s.scheduler.executor.Explain(),
 		"TaskScheduler": s.scheduler.taskScheduler.Explain(),
+		"Client":        clientInfo,
 	}
 
 	err := encoder.Encode(data)

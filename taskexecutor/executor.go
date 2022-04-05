@@ -2,9 +2,10 @@ package taskexecutor
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
 	"os/exec"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/MaratBR/TelephonistAgent/telephonist"
@@ -47,6 +48,12 @@ func (e *ShellExecutor) CanExecute(task *telephonist.DefinedTask) bool {
 }
 
 func (e *ShellExecutor) Execute(descriptor *TaskExecutionDescriptor) error {
+	defer func() {
+		if r := recover(); r != nil {
+			println(fmt.Sprintf("panic! %v", r))
+		}
+	}()
+
 	if descriptor.Task.Body.Type != telephonist.TASK_TYPE_EXEC && descriptor.Task.Body.Type != telephonist.TASK_TYPE_SCRIPT {
 		panic("invali task type")
 	}
@@ -89,7 +96,12 @@ func (e *ShellExecutor) Execute(descriptor *TaskExecutionDescriptor) error {
 		index += 1
 	}
 
-	cmd.Stdin = strings.NewReader(body)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return err
+	}
+	io.WriteString(stdin, body)
+	stdin.Close()
 
 	// output (i.e. logs)
 	output := NewOutputBuffer(&OutputBufferOptions{
@@ -97,10 +109,27 @@ func (e *ShellExecutor) Execute(descriptor *TaskExecutionDescriptor) error {
 		FlushEvery:    time.Second,
 		FlushCallback: descriptor.FlushCallback,
 	})
-	cmd.Stderr = output.Stderr
-	cmd.Stdout = output.Stdout
+
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return err
+	}
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+
+	go func() {
+		io.Copy(output.Stdout, stdout)
+	}()
+
+	go func() {
+		io.Copy(output.Stderr, stderr)
+	}()
+
 	output.Start()
-	err := cmd.Run()
+	err = cmd.Run()
 	output.Stop()
 	return err
 }

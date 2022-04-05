@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"net/url"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MaratBR/TelephonistAgent/locales"
 	"github.com/MaratBR/TelephonistAgent/logging"
 	"github.com/MaratBR/TelephonistAgent/telephonist"
 	"github.com/juju/fslock"
@@ -28,8 +30,9 @@ const (
 )
 
 var (
-	ErrApplicationKeyIsMissing = errors.New("application key is missing")
-	logger                     = logging.ChildLogger("app")
+	ErrApplicationKeyIsMissing = fmt.Errorf(
+		locales.M.KeyMissing+". "+locales.M.TryRunInit+"(%s init)", os.Args[0])
+	logger = logging.ChildLogger("app")
 )
 
 type AppConfig struct {
@@ -43,8 +46,6 @@ type App struct {
 
 	appConfigFile     *ConfigFile
 	appConfig         *AppConfig
-	instanceID        string
-	machineID         string
 	telephonistClient *telephonist.Client
 	scheduler         *ApplicationScheduler
 	configFolderPath  string
@@ -69,12 +70,12 @@ func CreateNewApp() *App {
 	app.Flags = []cli.Flag{
 		&cli.BoolFlag{
 			Name:  "restart",
-			Usage: "if set, will restart the agent if it fails",
+			Usage: locales.M.Cli.Flag.Restart,
 		},
 		&cli.BoolFlag{
 			Name:  "secure",
 			Value: false,
-			Usage: "if set connects to API using https and wss (enforces HTTPS event if url is set to http://...)",
+			Usage: locales.M.Cli.Flag.Secure,
 		},
 		&cli.StringFlag{
 			Name:  CONFIG_FOLDER_PATH_F,
@@ -114,22 +115,14 @@ func CreateNewApp() *App {
 			Usage:  "tries to connect to the running instance of TelephonistAgent and request a config reload",
 			Action: app.refetchConfigAction,
 		},
+		{
+			Name:   "init",
+			Usage:  locales.M.Cli.Actions.Init,
+			Action: app.initAction,
+		},
 	}
 	app.Action = app.action
 	return app
-}
-
-func (a *App) refetchConfigAction(c *cli.Context) error {
-	return nil
-}
-
-func (a *App) testAction(c *cli.Context) error {
-	err := a.appConfigFile.Load(&AppConfig{})
-	if err != nil {
-		return err
-	}
-	println("config is OK")
-	return nil
 }
 
 func (a *App) before(c *cli.Context) error {
@@ -159,6 +152,175 @@ func (a *App) after(c *cli.Context) error {
 	return nil
 }
 
+// #region Actions
+
+func (a *App) refetchConfigAction(c *cli.Context) error {
+	return nil
+}
+
+func (a *App) startCRProcedure() {
+	u, err := url.Parse(a.appConfig.TelephonistAddress)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, locales.M.InvalidURL+"\n", a.appConfig.TelephonistAddress)
+		os.Exit(1)
+	}
+	uiURL, _ := url.Parse(a.appConfig.TelephonistAddress)
+	uiURL.Path = "/admin/applications/cr"
+	{
+		query := uiURL.Query()
+		query.Add("gc", "1")
+		uiURL.RawQuery = query.Encode()
+	}
+	fmt.Printf(locales.M.PleaseGoToCR+"\n", uiURL.String())
+	println(locales.M.DomainNameNote)
+	valid := false
+	reader := bufio.NewReader(os.Stdin)
+	name := readStringWithCondition(locales.M.Name, isNotEmptyString)
+	displayName := readString(locales.M.DisplayNameOrEmpty)
+	tags := readTags(locales.M.Tags)
+
+	client, err := telephonist.NewClient(telephonist.ClientOptions{URL: u})
+	if err != nil {
+		panic(err)
+	}
+
+	var response telephonist.CodeRegistrationCompleted
+	for !valid {
+		code, _ := reader.ReadString('\n')
+		code = strings.Trim(code[:len(code)-1], " \t")
+		response, err = client.SubmitCodeRegistration(code, &telephonist.CreateApplicationRequest{
+			Name:        name,
+			DisplayName: &displayName,
+			Tags:        tags,
+		})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+		} else {
+			valid = true
+			a.appConfig.ApplicationKey = response.Key
+			err = a.appConfigFile.Write(a.appConfig)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, locales.M.FailedToWriteConfig+"\n", err.Error())
+				fmt.Printf(locales.M.KeyIs+"\n", response.Key)
+			}
+		}
+	}
+}
+
+func (a *App) initAction(c *cli.Context) error {
+	println(fmt.Sprintf("config: %s", a.appConfigFile.filepath))
+	err := a.appConfigFile.LoadOrCreate(a.appConfig)
+	if err != nil {
+		println(fmt.Sprintf("failed to load config file: %s", err.Error()))
+		os.Exit(1)
+	}
+	reader := bufio.NewReader(os.Stdin)
+	if strings.Trim(a.appConfig.TelephonistAddress, " \t\n") == "" {
+		println(locales.M.APIURLMissing)
+		valid := false
+
+		var (
+			err  error
+			text string
+			u    *url.URL
+		)
+
+		for !valid {
+			println(locales.M.EnterAPIURL)
+			print(">")
+			text, _ = reader.ReadString('\n')
+			text = text[:len(text)-1]
+			u, err = url.Parse(text)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, locales.M.InvalidURL+"\n", text)
+			}
+		}
+
+		client, err := telephonist.NewClient(telephonist.ClientOptions{
+			URL: u,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to create telephonist client: %s\n", err.Error())
+		}
+		err = client.Probe()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, locales.M.FailedToConnectToTheServer+"\n", err.Error())
+			os.Exit(1)
+		}
+
+		a.appConfig.TelephonistAddress = text
+	} else {
+		fmt.Printf(locales.M.APIURLIs+"\n", a.appConfig.TelephonistAddress)
+		valid := false
+
+		for !valid {
+			println(locales.M.InputNewURLOrEmpty)
+			print(">")
+			text, _ := reader.ReadString('\n')
+			text = text[:len(text)-1]
+			if strings.Trim(text, " \n\t") == "" {
+				valid = true
+			} else {
+				_, err := url.Parse(text)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, locales.M.InvalidURL+"\n", text)
+				} else {
+					valid = true
+					a.appConfig.TelephonistAddress = text
+				}
+			}
+		}
+	}
+
+	if strings.Trim(a.appConfig.ApplicationKey, " \n\t") == "" {
+		fmt.Fprintln(os.Stderr, locales.M.KeyMissing)
+
+		println(locales.M.WantCR)
+		if readYn() {
+			a.startCRProcedure()
+		} else {
+			var key string
+			for len(key) == 0 {
+				println(locales.M.InputKey)
+				print(">")
+				key, _ = reader.ReadString('\n')
+				key = strings.Trim(key, " \n\t")
+			}
+		}
+	} else {
+		fmt.Printf(locales.M.KeyIs+"\n", a.appConfig.ApplicationKey)
+		println(locales.M.InputNewKeyOrEmpty)
+		print(">")
+		text, _ := reader.ReadString('\n')
+		text = strings.Trim(text[:len(text)-1], " \t")
+		if text != "" {
+			a.appConfig.ApplicationKey = text
+		}
+	}
+
+	println(locales.M.FinalConfigIs)
+	println("ApplicationKey = " + a.appConfig.ApplicationKey)
+	println("TelephonistAddress = " + a.appConfig.TelephonistAddress)
+	println()
+	println(locales.M.IsThatOkay)
+	if readYn() {
+		err = a.appConfigFile.Write(a.appConfig)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, locales.M.FailedToWriteConfig+"\n", err.Error())
+		}
+	}
+	return nil
+}
+
+func (a *App) testAction(c *cli.Context) error {
+	err := a.appConfigFile.Load(&AppConfig{})
+	if err != nil {
+		return err
+	}
+	println("config is OK")
+	return nil
+}
+
 // action runs the main action of this app (agent itself)
 func (a *App) action(c *cli.Context) error {
 	fatalOnErr(a.lockFile(c))
@@ -172,8 +334,8 @@ func (a *App) action(c *cli.Context) error {
 			zap.String("file", a.appConfigFile.filepath),
 		)
 	}
-	logger.Debug("config file located",
-		zap.String("config", a.appConfigFile.filepath),
+	logger.Debug("config file located: "+a.appConfigFile.filepath,
+		zap.String("cfgPath", a.appConfigFile.filepath),
 	)
 	logger.Debug("api url = " + a.appConfig.TelephonistAddress)
 
@@ -214,6 +376,8 @@ func (a *App) action(c *cli.Context) error {
 
 	return nil
 }
+
+// #endregion
 
 func (a *App) createTelephonistClient() error {
 	u, err := url.Parse(a.appConfig.TelephonistAddress)
@@ -285,13 +449,17 @@ func (a *App) filenameHelper(filename string) string {
 	return filepath.Join(a.configFolderPath, filename)
 }
 
-func (a *App) lockFile(c *cli.Context) error {
-	if a.fsLock != nil {
+func (self *App) lockFile(c *cli.Context) error {
+	if self.fsLock != nil {
 		return nil
 	}
-	lockFilepath := a.filenameHelper("client.lock")
-	a.fsLock = fslock.New(lockFilepath)
-	return a.fsLock.LockWithTimeout(time.Second * 1)
+	lockFilepath := self.filenameHelper("client.lock")
+	self.fsLock = fslock.New(lockFilepath)
+	err := self.fsLock.LockWithTimeout(time.Second * 1)
+	if err != nil {
+		return fmt.Errorf("failed to acquire the lock %s: %s, make sure you only run one instance of the agent at a time and then try again", lockFilepath, err.Error())
+	}
+	return nil
 }
 
 // #endregion
