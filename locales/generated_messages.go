@@ -17,6 +17,18 @@ type Messages struct {
 			Verbose          string `json:"Verbose"`
 		} `json:"Flag"`
 	} `json:"CLI"`
+	CreateService struct {
+		CreatingGroup                      string `json:"CreatingGroup"`
+		CreatingUser                       string `json:"CreatingUser"`
+		FailedToChmodDir                   string `json:"FailedToChmodDir"`
+		FailedToChownDir                   string `json:"FailedToChownDir"`
+		FailedToCopyExecutable             string `json:"FailedToCopyExecutable"`
+		FailedToCreateGroup                string `json:"FailedToCreateGroup"`
+		FailedToCreateUser                 string `json:"FailedToCreateUser"`
+		FailedToModifyDirectoryPermissions string `json:"FailedToModifyDirectoryPermissions"`
+		FileIsAlreadyInPlace               string `json:"FileIsAlreadyInPlace"`
+		ModifyingDirectoryPermissions      string `json:"ModifyingDirectoryPermissions"`
+	} `json:"CreateService"`
 	DisplayNameOrEmpty         string `json:"DisplayNameOrEmpty"`
 	DomainNameNote             string `json:"DomainNameNote"`
 	EnterAPIURL                string `json:"EnterApiUrl"`

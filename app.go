@@ -83,11 +83,6 @@ func CreateNewApp() *App {
 			Usage: "path to the main configuration folder with client.json and client.lock",
 		},
 		&cli.StringFlag{
-			Name:  SOCKET_F,
-			Value: "/var/telephonist-agent/client-daemon.socket",
-			Usage: "sets the path to the file that will be used as a unix socket",
-		},
-		&cli.StringFlag{
 			Name:  CONFIG_PATH_F,
 			Value: "",
 			Usage: "sets the path to the main config file",
@@ -119,6 +114,15 @@ func CreateNewApp() *App {
 			Name:   "init",
 			Usage:  locales.M.Cli.Actions.Init,
 			Action: app.initAction,
+		},
+		{
+			Name: "service",
+			Subcommands: []*cli.Command{
+				{
+					Name:   "install",
+					Action: app.installServiceAction,
+				},
+			},
 		},
 	}
 	app.Action = app.action
@@ -463,3 +467,21 @@ func (self *App) lockFile(c *cli.Context) error {
 }
 
 // #endregion
+
+//#region Service installation, checks etc.
+
+func (self *App) installServiceAction(c *cli.Context) error {
+	err := createUserAndModifyConfDirPerms()
+	if err != nil {
+		return err
+	}
+	err = moveExecutable()
+	if err != nil {
+		return err
+	}
+	err = createServiceFile()
+	if err != nil {
+		return err
+	}
+	return nil
+}

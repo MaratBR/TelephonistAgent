@@ -21,17 +21,23 @@ func ChainError(message string, inner error) *ChainedError {
 	}
 }
 
-func (err *ChainedError) Error() string {
+func (self *ChainedError) Error() string {
 	var sb strings.Builder
-	chain := err
-	prefix := ""
+	var err error = self
+	var chain *ChainedError
+	prefix := "\n"
+	var ok bool
 
-	for l := err.level; l > 0; l-- {
-		sb.WriteString(prefix + strings.ReplaceAll(chain.Message, "\n", "\n"+prefix))
-		prefix += "\n"
-		chain = chain.InnerError.(*ChainedError)
+	for {
+		if chain, ok = err.(*ChainedError); !ok {
+			sb.WriteString(prefix + strings.ReplaceAll(err.Error(), "\n", "\n"+prefix))
+			break
+		} else {
+			sb.WriteString(prefix + strings.ReplaceAll(chain.Message, "\n", "\n"+prefix))
+			prefix += "\t"
+			err = chain.InnerError
+		}
 	}
-	sb.WriteString(prefix + strings.ReplaceAll(chain.InnerError.Error(), "\n", "\n"+prefix))
 
 	return sb.String()
 }

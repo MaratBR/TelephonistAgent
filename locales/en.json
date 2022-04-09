@@ -35,5 +35,18 @@
             "Info": "",
             "Main": ""
         }
+    },
+    "CreateService": {
+        "CreatingUser": "Creating the user \"telephonist\" for the service",
+        "FailedToCreateUser": "Failed to create user \"telephonist\"",
+        "CreatingGroup": "Creating group \"telephonist\"",
+        "FailedToCreateGroup": "Failed to create group \"telephonist\"",
+        "FailedToModifyDirectoryPermissions": "Failed to modify directory permissions: %s",
+        "ModifyingDirectoryPermissions": "Modifying directory %s permissions",
+        "FileIsAlreadyInPlace": "[WARNING!] Executable file is alredy where it should be, please ensure that it has the right ownership (telephonist user)",
+        "FailedToCopyExecutable": "Failed to copy executable",
+
+        "FailedToChmodDir": "Failed to change directory's permissions (chmod)",
+        "FailedToChownDir": "Failed to change directory's ownership (chown)"
     }
 }
