@@ -4,13 +4,16 @@ import (
 	"bytes"
 	"io"
 	"os/exec"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
-func TestConcept(t *testing.T) {
+func sleep(seconds int) {
 	cmd := exec.Command("/bin/sh")
-	cmd.Stdin = strings.NewReader("sleep 10\necho 1\nexit")
+	cmd.Stdin = strings.NewReader("sleep " + strconv.Itoa(seconds) + "\necho 1\nexit")
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
@@ -51,5 +54,24 @@ func TestConcept(t *testing.T) {
 	}
 	if len(v) != 0 {
 		panic(len(v))
+	}
+}
+
+func TestConcept(t *testing.T) {
+	sleep(10)
+}
+
+func TestConceptManyTimes(t *testing.T) {
+	var count int64 = 1
+	seconds := 60
+	for i := int64(0); i < count; i++ {
+		go func() {
+			sleep(seconds)
+			atomic.AddInt64(&count, -1)
+		}()
+	}
+	time.Sleep(time.Second * time.Duration(seconds+1))
+	if count > 0 {
+		panic(count)
 	}
 }

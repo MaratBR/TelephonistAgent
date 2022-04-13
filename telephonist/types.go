@@ -246,11 +246,6 @@ type IntroductionData struct {
 	AppId          string `json:"app_id"`
 }
 
-type TasksIncomingMessage struct {
-	Tasks  []*DefinedTask       `json:"tasks"`
-	Errors map[uuid.UUID]string `json:"errors"`
-}
-
 type LogRecord struct {
 	Time     time.Time   `json:"t"`
 	Severity LogSeverity `json:"severity"`

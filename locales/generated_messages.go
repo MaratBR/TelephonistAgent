@@ -18,16 +18,8 @@ type Messages struct {
 		} `json:"Flag"`
 	} `json:"CLI"`
 	CreateService struct {
-		CreatingGroup                      string `json:"CreatingGroup"`
-		CreatingUser                       string `json:"CreatingUser"`
-		FailedToChmodDir                   string `json:"FailedToChmodDir"`
-		FailedToChownDir                   string `json:"FailedToChownDir"`
-		FailedToCopyExecutable             string `json:"FailedToCopyExecutable"`
-		FailedToCreateGroup                string `json:"FailedToCreateGroup"`
-		FailedToCreateUser                 string `json:"FailedToCreateUser"`
-		FailedToModifyDirectoryPermissions string `json:"FailedToModifyDirectoryPermissions"`
-		FileIsAlreadyInPlace               string `json:"FileIsAlreadyInPlace"`
-		ModifyingDirectoryPermissions      string `json:"ModifyingDirectoryPermissions"`
+		FailedToCopyExecutable string `json:"FailedToCopyExecutable"`
+		FileIsAlreadyInPlace   string `json:"FileIsAlreadyInPlace"`
 	} `json:"CreateService"`
 	DisplayNameOrEmpty         string `json:"DisplayNameOrEmpty"`
 	DomainNameNote             string `json:"DomainNameNote"`
@@ -35,6 +27,7 @@ type Messages struct {
 	FailedToConnectToTheServer string `json:"FailedToConnectToTheServer"`
 	FailedToWriteConfig        string `json:"FailedToWriteConfig"`
 	FinalConfigIs              string `json:"FinalConfigIs"`
+	IgnoreServerUnavailability string `json:"IgnoreServerUnavailability"`
 	InputKey                   string `json:"InputKey"`
 	InputNewKeyOrEmpty         string `json:"InputNewKeyOrEmpty"`
 	InputNewURLOrEmpty         string `json:"InputNewUrlOrEmpty"`

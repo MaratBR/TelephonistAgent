@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"time"
 
 	"github.com/MaratBR/TelephonistAgent/taskexecutor"
 	"github.com/MaratBR/TelephonistAgent/taskscheduler"
@@ -73,7 +74,7 @@ func (e *ApplicationScheduler) Start() error {
 }
 
 func (e *ApplicationScheduler) onConnected() {
-	e.SyncConfig()
+	//
 }
 
 func (e *ApplicationScheduler) getOrSetInstanceID() uuid.UUID {
@@ -127,7 +128,7 @@ func (e *ApplicationScheduler) Stop() {
 // SyncConfig sends a sychronization message to the server and synchronizes tasks list
 // with the server, this only needs to be done once on each connection
 func (e *ApplicationScheduler) SyncConfig() error {
-	return e.wsc.SendTasksSync(getTasksArray(e.config.Value.Tasks))
+	return e.wsc.SendTasksSync()
 }
 
 func (e *ApplicationScheduler) onTrigger(event taskscheduler.TaskTriggeredEvent) {
@@ -145,6 +146,7 @@ func (e *ApplicationScheduler) onTrigger(event taskscheduler.TaskTriggeredEvent)
 func (e *ApplicationScheduler) executeTask(event taskscheduler.TaskTriggeredEvent) error {
 	// start new sequence and create params
 	var sequenceID string
+	time.Sleep(time.Millisecond * 50)
 
 	{
 		seq, err := e.client.CreateSequence(telephonist.CreateSequenceRequest{
@@ -243,6 +245,7 @@ func (e *ApplicationScheduler) onTask(task *telephonist.DefinedTask) {
 func (e *ApplicationScheduler) onTaskRemoved(id uuid.UUID) {
 	delete(e.config.Value.Tasks, id)
 	e.config.Write()
+	logger.Info(fmt.Sprintf("removed task %s because it was reported as deleted by the backend", id.String()))
 }
 
 type ExecutorConfig struct {

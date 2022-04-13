@@ -12,7 +12,8 @@
             "mode": "auto",
             "program": ".",
             "buildFlags": "-tags debug",
-            "args": ["-v"]
+            "args": ["-v"],
+            "sudo": true
         },
         {
             "name": "init",

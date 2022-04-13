@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/MaratBR/TelephonistAgent/telephonist"
+	"github.com/MaratBR/TelephonistAgent/utils"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
@@ -61,7 +62,7 @@ func (st *ScheduledTrigger) IsSuccessful() bool {
 }
 
 type ScheduledTask struct {
-	DefinedTask       telephonist.DefinedTask
+	DefinedTask       *telephonist.DefinedTask
 	ScheduledTriggers map[uint64]*ScheduledTrigger
 }
 
@@ -103,14 +104,19 @@ func (e *taskScheduler) UnscheduleTask(taskID uuid.UUID) {
 
 func (e *taskScheduler) Schedule(task *telephonist.DefinedTask) error {
 	if t, exists := e.tasks[task.ID]; exists {
+		t.DefinedTask = task
 		// update existing task
 		logger.Debug("updating the task", zap.String("taskId", task.ID.String()))
 		newTriggers := make(map[uint64]*telephonist.TaskTrigger, len(task.Triggers))
 
 		// add or update new triggers
 		for _, newTrigger := range task.Triggers {
-			id, _ := e.updateTrigger(task.ID, newTrigger)
-			newTriggers[id] = newTrigger
+			id, err := e.updateTrigger(task.ID, newTrigger)
+			if err != nil {
+				logger.Error(fmt.Sprintf("failed to update trigger %#v", newTrigger))
+			} else {
+				newTriggers[id] = newTrigger
+			}
 		}
 
 		// find old trigger and remove them
@@ -127,19 +133,29 @@ func (e *taskScheduler) Schedule(task *telephonist.DefinedTask) error {
 			}
 		}
 	} else {
-		logger.Debug("scheduling new task",
-			zap.String("taskId", task.ID.String()),
-			zap.Int("triggersTotal", len(task.Triggers)),
-		)
 		e.tasks[task.ID] = &ScheduledTask{
 			ScheduledTriggers: make(map[uint64]*ScheduledTrigger, len(task.Triggers)),
-			DefinedTask:       *task,
+			DefinedTask:       task,
 		}
 		if len(task.Triggers) == 0 {
 			logger.Warn(fmt.Sprintf("task %s has no triggers", task.Name))
+		} else {
+			logger.Debug("scheduling new task",
+				zap.String("name", task.Name),
+				zap.String("taskId", task.ID.String()),
+				zap.Int("triggersTotal", len(task.Triggers)),
+			)
 		}
 		for _, trigger := range task.Triggers {
-			e.updateTrigger(task.ID, trigger)
+			_, err := e.updateTrigger(task.ID, trigger)
+			if err != nil {
+				logger.Error(
+					fmt.Sprintf("failed to update trigger %#v while scheduling task", trigger),
+					zap.String("taskName", task.Name),
+					zap.Stringer("taskID", task.ID),
+					zap.Error(err),
+				)
+			}
 		}
 	}
 	return nil
@@ -159,22 +175,20 @@ func (e *taskScheduler) updateTrigger(taskID uuid.UUID, trigger *telephonist.Tas
 	st := e.tasks[taskID]
 	id := trigger.GetID()
 
-	logger.Debug("updateTrigger", zap.Uint64("triggerID", id), zap.String("name", trigger.Name), zap.String("body", string(trigger.Body)))
-
 	// check if trigger is already scheduled, if it isn't - schedule it
 	if _, exists := st.ScheduledTriggers[id]; !exists {
 		_, err := e.triggersScheduler.ScheduleByID(id, trigger)
 		if err != nil {
-			return 0, err
+			return 0, utils.ChainError("failed to schedule trigger", err)
 		}
 		scheduledTrigger := &ScheduledTrigger{
 			Trigger:         *trigger,
 			SchedulingError: err,
 		}
 		st.ScheduledTriggers[id] = scheduledTrigger
-		e.triggerTasks[id] = map[uuid.UUID]*telephonist.DefinedTask{taskID: &st.DefinedTask}
+		e.triggerTasks[id] = map[uuid.UUID]*telephonist.DefinedTask{taskID: st.DefinedTask}
 	} else {
-		e.triggerTasks[id][taskID] = &st.DefinedTask
+		e.triggerTasks[id][taskID] = st.DefinedTask
 	}
 
 	return id, nil

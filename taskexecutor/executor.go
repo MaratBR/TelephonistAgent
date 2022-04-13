@@ -50,7 +50,7 @@ func (e *ShellExecutor) CanExecute(task *telephonist.DefinedTask) bool {
 func (e *ShellExecutor) Execute(descriptor *TaskExecutionDescriptor) error {
 	defer func() {
 		if r := recover(); r != nil {
-			println(fmt.Sprintf("panic! %v", r))
+			println(fmt.Sprintf("panic! %#v", r))
 		}
 	}()
 

@@ -22,13 +22,14 @@ type OutputBuffer struct {
 	Stderr io.Writer
 	Stdout io.Writer
 
-	opts       OutputBufferOptions
-	lastFlush  time.Time
-	stdout     bytes.Buffer
-	stderr     bytes.Buffer
-	records    []telephonist.LogRecord
-	flushClose chan struct{}
-	mut        sync.Mutex
+	opts               OutputBufferOptions
+	lastFlush          time.Time
+	stdout             bytes.Buffer
+	stderr             bytes.Buffer
+	records            []telephonist.LogRecord
+	flushClose         chan struct{}
+	closedConfirmation chan struct{}
+	mut                sync.Mutex
 }
 
 type LogFlushCallback func([]telephonist.LogRecord)
@@ -66,11 +67,13 @@ func (buf *OutputBuffer) Flush() {
 func (buf *OutputBuffer) Start() {
 	buf.lastFlush = time.Now()
 	buf.flushClose = make(chan struct{})
+	buf.closedConfirmation = make(chan struct{})
 	go buf.flushLoop()
 }
 
 func (buf *OutputBuffer) Stop() {
 	buf.flushClose <- struct{}{}
+	<-buf.closedConfirmation
 }
 
 func (buf *OutputBuffer) flushLoop() {
@@ -79,6 +82,7 @@ outer:
 		select {
 		case <-buf.flushClose:
 			buf.Flush()
+			buf.closedConfirmation <- struct{}{}
 			break outer
 		case <-time.After(buf.opts.FlushEvery):
 			buf.Flush()
@@ -89,10 +93,13 @@ outer:
 func (buf *OutputBuffer) Write(data []byte, isStderr bool) (int, error) {
 	length := len(data)
 	var w bytes.Buffer
+	var severity telephonist.LogSeverity
 	if isStderr {
 		w = buf.stderr
+		severity = telephonist.SEVERITY_ERROR
 	} else {
 		w = buf.stdout
+		severity = telephonist.SEVERITY_INFO
 	}
 	{
 		leftover := w.Len()
@@ -109,8 +116,9 @@ func (buf *OutputBuffer) Write(data []byte, isStderr bool) (int, error) {
 	records := make([]telephonist.LogRecord, len(lines))
 
 	for i := 0; i < len(lines); i++ {
-		records[i].Severity = telephonist.SEVERITY_ERROR
+		records[i].Severity = severity
 		records[i].Body = lines[i]
+		records[i].Time = time.Now().UTC()
 	}
 
 	buf.mut.Lock()

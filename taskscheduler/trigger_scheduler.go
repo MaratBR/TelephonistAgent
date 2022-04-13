@@ -181,6 +181,7 @@ func (e *FSTriggersScheduler) ScheduleByID(id uint64, trigger *telephonist.TaskT
 		if err != nil {
 			return 0, err
 		}
+		logger.Debug(fmt.Sprintf("watching: %s", path))
 		e.pathTriggers[path] = map[uint64]*telephonist.TaskTrigger{id: trigger}
 	}
 	e.triggers[id] = trigger
@@ -328,6 +329,13 @@ func (e *TelephonistScheduler) ScheduleByID(id uint64, trigger *telephonist.Task
 	}
 	event := trigger.MustString()
 	e.triggers[id] = trigger
+	if triggers, ok := e.eventTriggers[event]; ok {
+		triggers[id] = trigger
+	} else {
+		e.eventTriggers[event] = map[uint64]*telephonist.TaskTrigger{
+			id: trigger,
+		}
+	}
 	if count, exists := e.subscriptionsCounters[event]; exists {
 		e.subscriptionsCounters[event] = count + 1
 	} else {
@@ -342,6 +350,12 @@ func (e *TelephonistScheduler) Unschedule(id uint64) (error, bool) {
 	if exists {
 		delete(e.triggers, id)
 		event := trigger.MustString()
+		if triggers, ok := e.eventTriggers[event]; ok {
+			delete(triggers, id)
+			if len(triggers) == 0 {
+				delete(e.eventTriggers, event)
+			}
+		}
 		count := e.subscriptionsCounters[event]
 		if count == 1 {
 			delete(e.subscriptionsCounters, event)
@@ -356,12 +370,13 @@ func (e *TelephonistScheduler) Unschedule(id uint64) (error, bool) {
 func (e *TelephonistScheduler) Start() error {
 	if e.queue == nil {
 		e.queue = e.client.NewQueue()
+		go e.drain()
 	}
 	return nil
 }
 
-func (e *TelephonistScheduler) start() {
-	for {
+func (e *TelephonistScheduler) drain() {
+	for e.queue != nil {
 		event, ok := <-e.queue.Channel
 		if !ok {
 			return

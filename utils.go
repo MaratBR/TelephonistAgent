@@ -52,7 +52,10 @@ func readString(title string) string {
 	reader := bufio.NewReader(os.Stdin)
 	print(title)
 	print(">")
-	value, _ := reader.ReadString('\n')
+	value, err := reader.ReadString('\n')
+	if err != nil {
+		panic(err)
+	}
 	value = value[:len(value)-1]
 	return value
 }

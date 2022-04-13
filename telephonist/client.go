@@ -157,7 +157,6 @@ func (c *Client) getUrl(sUrl string) *url.URL {
 	u := new(url.URL)
 	*u = *c.opts.URL
 	u.Path = path.Join(u.Path, "api/application-v1", sUrl)
-	println(u.String())
 	return u
 }
 
@@ -255,17 +254,6 @@ func (c Client) GetTasks() ([]TaskView, error) {
 		return nil, err
 	}
 	return tasks, nil
-}
-
-func (c *Client) SyncTasks(tasks []DefinedTask) (*TaskSyncResponse, *CombinedError) {
-	resp := new(TaskSyncResponse)
-	_, err := c.httpPost("defined-tasks/synchronize", map[string]interface{}{
-		"tasks": tasks,
-	}, resp)
-	if err != nil {
-		return nil, err
-	}
-	return resp, nil
 }
 
 func (c *Client) CheckTaskNamesArray(names []string) (*TakenTasks, *CombinedError) {

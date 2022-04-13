@@ -15,7 +15,6 @@ import (
 	"github.com/MaratBR/TelephonistAgent/logging"
 	"github.com/MaratBR/TelephonistAgent/telephonist"
 	"github.com/juju/fslock"
-	"github.com/parnurzeal/gorequest"
 	"github.com/urfave/cli/v2"
 	"go.uber.org/zap"
 )
@@ -121,6 +120,12 @@ func CreateNewApp() *App {
 				{
 					Name:   "install",
 					Action: app.installServiceAction,
+					Flags: []cli.Flag{
+						&cli.BoolFlag{
+							Name:    "restart",
+							Aliases: []string{"f", "r"},
+						},
+					},
 				},
 			},
 		},
@@ -168,17 +173,7 @@ func (a *App) startCRProcedure() {
 		fmt.Fprintf(os.Stderr, locales.M.InvalidURL+"\n", a.appConfig.TelephonistAddress)
 		os.Exit(1)
 	}
-	uiURL, _ := url.Parse(a.appConfig.TelephonistAddress)
-	uiURL.Path = "/admin/applications/cr"
-	{
-		query := uiURL.Query()
-		query.Add("gc", "1")
-		uiURL.RawQuery = query.Encode()
-	}
-	fmt.Printf(locales.M.PleaseGoToCR+"\n", uiURL.String())
-	println(locales.M.DomainNameNote)
 	valid := false
-	reader := bufio.NewReader(os.Stdin)
 	name := readStringWithCondition(locales.M.Name, isNotEmptyString)
 	displayName := readString(locales.M.DisplayNameOrEmpty)
 	tags := readTags(locales.M.Tags)
@@ -190,7 +185,8 @@ func (a *App) startCRProcedure() {
 
 	var response telephonist.CodeRegistrationCompleted
 	for !valid {
-		code, _ := reader.ReadString('\n')
+		fmt.Printf(locales.M.PleaseGoToCR+"\n", "/admin/applications/cr")
+		code := readString("CODE")
 		code = strings.Trim(code[:len(code)-1], " \t")
 		response, err = client.SubmitCodeRegistration(code, &telephonist.CreateApplicationRequest{
 			Name:        name,
@@ -249,7 +245,10 @@ func (a *App) initAction(c *cli.Context) error {
 		err = client.Probe()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, locales.M.FailedToConnectToTheServer+"\n", err.Error())
-			os.Exit(1)
+			println(locales.M.IgnoreServerUnavailability)
+			if !readYn() {
+				os.Exit(1)
+			}
 		}
 
 		a.appConfig.TelephonistAddress = text
@@ -289,6 +288,7 @@ func (a *App) initAction(c *cli.Context) error {
 				print(">")
 				key, _ = reader.ReadString('\n')
 				key = strings.Trim(key, " \n\t")
+				a.appConfig.ApplicationKey = key
 			}
 		}
 	} else {
@@ -313,6 +313,7 @@ func (a *App) initAction(c *cli.Context) error {
 			fmt.Fprintf(os.Stderr, locales.M.FailedToWriteConfig+"\n", err.Error())
 		}
 	}
+
 	return nil
 }
 
@@ -392,15 +393,6 @@ func (a *App) createTelephonistClient() error {
 		return errors.New("invalid URL schema, schema must be either http or https or empty (\"\")")
 	}
 
-	{
-		u.Scheme = "https"
-		_, _, errs := gorequest.New().Get(u.String()).End()
-		if errs != nil {
-			logger.Warn("failed to connect to the API through https, will assume http protocol is used")
-			u.Scheme = "http"
-		}
-	}
-
 	a.telephonistClient, err = telephonist.NewClient(telephonist.ClientOptions{
 		APIKey: a.appConfig.ApplicationKey,
 		URL:    u,
@@ -471,10 +463,14 @@ func (self *App) lockFile(c *cli.Context) error {
 //#region Service installation, checks etc.
 
 func (self *App) installServiceAction(c *cli.Context) error {
-	err := createUserAndModifyConfDirPerms()
-	if err != nil {
-		return err
+	restartFlag := c.Bool("restart")
+	if restartFlag {
+		err := stopService()
+		if err != nil {
+			return err
+		}
 	}
+	var err error
 	err = moveExecutable()
 	if err != nil {
 		return err
@@ -483,5 +479,12 @@ func (self *App) installServiceAction(c *cli.Context) error {
 	if err != nil {
 		return err
 	}
+	if restartFlag {
+		err = reloadDaemon()
+		if err != nil {
+			return err
+		}
+	}
+
 	return nil
 }

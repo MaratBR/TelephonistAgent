@@ -41,7 +41,7 @@ func TestValidatorOnHttpPost(t *testing.T) {
 		t.Fatal("invalid error: expected CombinedError with exactly 1 error, got: nil")
 	}
 	if len(cerr) != 1 {
-		t.Fatalf("invalid error: expected CombinedError with exactly 1 error, got: %v", cerr)
+		t.Fatalf("invalid error: expected CombinedError with exactly 1 error, got: %#v", cerr)
 	}
 	if _, ok := cerr[0].(validator.ValidationErrors); !ok {
 		t.Fatalf("invalid error: expected CombinedError with exactly 1 error, got: %#v", cerr)

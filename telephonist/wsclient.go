@@ -204,8 +204,8 @@ func (c *WSClient) SendWebsocketMessage(messageType string, data interface{}) er
 	return nil
 }
 
-func (c *WSClient) SendTasksSync(tasks []*DefinedTask) error {
-	return c.SendWebsocketMessage(MO_TASK_SYNC, tasks)
+func (c *WSClient) SendTasksSync() error {
+	return c.SendWebsocketMessage(MO_TASK_SYNC, nil)
 }
 
 func (c *WSClient) SendLogs(logs *LogMessage) error {
@@ -370,8 +370,8 @@ func (c *WSClient) handleMessage(m iRawMesage) (err error) {
 			c.onNewEvent(d)
 		}
 	case MI_TASKS:
-		d := new(TasksIncomingMessage)
-		err = convertToStruct(m.Data, d)
+		d := []*DefinedTask{}
+		err = convertToStruct(m.Data, &d)
 		if err == nil {
 			c.onNewTasks(d)
 		}
@@ -383,7 +383,7 @@ func (c *WSClient) handleMessage(m iRawMesage) (err error) {
 		}
 	case MI_TASK_REMOVED:
 		var id uuid.UUID
-		err = convertToStruct(m.Data, id)
+		err = convertToStruct(m.Data, &id)
 		if err == nil {
 			c.onTaskRemoved(id)
 		}
@@ -401,6 +401,8 @@ func (c *WSClient) handleMessage(m iRawMesage) (err error) {
 		}
 	case "greetings":
 		c.onGreetings()
+	case "logs_sent":
+		return
 	default:
 		return fmt.Errorf("received unknown message: %s", m.MessageType)
 	}
@@ -410,6 +412,16 @@ func (c *WSClient) handleMessage(m iRawMesage) (err error) {
 func (c *WSClient) onGreetings() {
 	if c.opts.OnConnected != nil {
 		c.opts.OnConnected()
+	}
+	messages := make([]string, len(c.eventChannels))
+	i := 0
+	for event, _ := range c.eventChannels {
+		messages[i] = event
+		i += 1
+	}
+	c.sendMessages <- oRawMessage{
+		MessageType: MO_SET_SUBSCRIPTIONS,
+		Data:        messages,
 	}
 }
 
@@ -458,16 +470,16 @@ func (c *WSClient) onNewEvent(d Event) {
 		for id, ch := range channels {
 			select {
 			case ch <- d:
-			case <-time.After(time.Millisecond * 100):
-				wsLogger.Warn(fmt.Sprintf("failed to put event in a queue eventChannels[%s][%d] with 100ms timeout", d.EventKey, id))
+			case <-time.After(time.Millisecond * 1500):
+				wsLogger.Error(fmt.Sprintf("failed to put event in a queue eventChannels[%s][%d] with 1500ms timeout", d.EventKey, id))
 			}
 		}
 	}
 }
 
-func (c *WSClient) onNewTasks(tasks *TasksIncomingMessage) {
+func (c *WSClient) onNewTasks(tasks []*DefinedTask) {
 	if c.opts.OnTasks != nil {
-		c.opts.OnTasks(tasks.Tasks)
+		c.opts.OnTasks(tasks)
 	}
 }
 
@@ -497,6 +509,10 @@ func (c *WSClient) addEventChannel(eventName string, channel eventsChannel) uint
 		channels[id] = channel
 	} else {
 		c.eventChannels[eventName] = map[uint32]eventsChannel{id: channel}
+		c.sendMessages <- oRawMessage{
+			MessageType: MO_SUBSCRIBE,
+			Data:        eventName,
+		}
 	}
 	return id
 }
@@ -504,6 +520,13 @@ func (c *WSClient) addEventChannel(eventName string, channel eventsChannel) uint
 func (c *WSClient) removeEventChannel(eventName string, id uint32) {
 	if channels, exists := c.eventChannels[eventName]; exists {
 		delete(channels, id)
+		if len(channels) == 0 {
+			delete(c.eventChannels, eventName)
+			c.sendMessages <- oRawMessage{
+				MessageType: MO_UNSUBSCRIBE,
+				Data:        eventName,
+			}
+		}
 	}
 }
 

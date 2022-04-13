@@ -35,5 +35,10 @@
             "Info": "",
             "Main": ""
         }
-    }
+    },
+    "CreateService": {
+        "FileIsAlreadyInPlace": "[ВНИМАНИЕ!] Исполняемый файл уже там, где он должен быть",
+        "FailedToCopyExecutable": "Не удалось скопировать исполняемый файл"
+    },
+    "IgnoreServerUnavailability": "Игнорировать недоступность сервера и продолжить?"
 }
