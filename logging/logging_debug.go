@@ -1,18 +1,16 @@
-//go:build debug
-
 package logging
 
 import (
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
+	"os"
+	"time"
+
+	"github.com/rs/zerolog"
 )
 
 func init() {
-	var err error
-	config := zap.NewDevelopmentConfig()
-	config.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
-	Root, err = config.Build()
-	if err != nil {
-		panic(err)
-	}
+	commonInit()
+	zerolog.SetGlobalLevel(zerolog.DebugLevel)
+	w := zerolog.ConsoleWriter{Out: os.Stderr}
+	w.TimeFormat = time.Stamp
+	rootLogger = zerolog.New(w).With().Timestamp().Caller().Logger()
 }

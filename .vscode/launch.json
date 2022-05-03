@@ -9,20 +9,11 @@
             "name": "main",
             "type": "go",
             "request": "launch",
-            "mode": "auto",
             "program": ".",
             "buildFlags": "-tags debug",
             "args": ["-v"],
-            "sudo": true
-        },
-        {
-            "name": "init",
-            "type": "go",
-            "request": "launch",
-            "mode": "auto",
-            "program": ".",
-            "buildFlags": "-tags debug",
-            "args": ["init"]
+            "console": "integratedTerminal"
+
         }
     ]
 }

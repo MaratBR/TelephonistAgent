@@ -1,18 +1,15 @@
 package main
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
-	"time"
 
 	"github.com/MaratBR/TelephonistAgent/taskexecutor"
 	"github.com/MaratBR/TelephonistAgent/taskscheduler"
 	"github.com/MaratBR/TelephonistAgent/telephonist"
 	"github.com/MaratBR/TelephonistAgent/utils"
 	"github.com/google/uuid"
-	"go.uber.org/zap"
 )
 
 type ApplicationScheduler struct {
@@ -57,7 +54,7 @@ func (e *ApplicationScheduler) Start() error {
 		OnTaskRemoved: e.onTaskRemoved,
 		OnTasks:       e.onTasks,
 		InstanceID:    e.InstanceID,
-		ConnectionID:  uuid.NewSHA1(e.InstanceID, []byte("connection_id")),
+		ConnectionID:  e.getConnectionID(),
 		OnConnected:   e.onConnected,
 	})
 	e.wsc.StartAsync()
@@ -97,6 +94,10 @@ func (e *ApplicationScheduler) getOrSetInstanceID() uuid.UUID {
 	return u
 }
 
+func (e *ApplicationScheduler) getConnectionID() uuid.UUID {
+	return uuid.NewSHA1(e.InstanceID, []byte("connection_id"))
+}
+
 func (e *ApplicationScheduler) createExecutor() error {
 	if e.client == nil {
 		panic("Telephonist client is not set")
@@ -134,19 +135,16 @@ func (e *ApplicationScheduler) SyncConfig() error {
 func (e *ApplicationScheduler) onTrigger(event taskscheduler.TaskTriggeredEvent) {
 	if !e.executor.CanExecute(event.Task) {
 		// probably will never happen
-		logger.Error("encountered a task, that cannot be executed")
+		logger.Error().Msg("encountered a task, that cannot be executed by ApplicationScheduler")
 		return
 	}
-	logger.Info(
-		fmt.Sprintf("running task %s", event.Task.Name),
-	)
+	logger.Info().Str("task ID", event.Task.ID.String()).Msgf("running task %s", event.Task.Name)
 	go e.executeTask(event)
 }
 
 func (e *ApplicationScheduler) executeTask(event taskscheduler.TaskTriggeredEvent) error {
 	// start new sequence and create params
 	var sequenceID string
-	time.Sleep(time.Millisecond * 50)
 
 	{
 		seq, err := e.client.CreateSequence(telephonist.CreateSequenceRequest{
@@ -172,7 +170,9 @@ func (e *ApplicationScheduler) executeTask(event taskscheduler.TaskTriggeredEven
 	}
 
 	params["TELEPHONIST_AGENT"] = "TelephonistAgent " + telephonist.VERSION
-	params["SEQUENCE_ID"] = sequenceID
+	params["TELEPHONIST_SEQUENCE_ID"] = sequenceID
+	params["TELEPHONIST_TASK_NAME"] = event.Task.Name
+	params["TELEPHONIST_TASK_ID"] = event.Task.ID.String()
 
 	err := e.executor.Execute(&taskexecutor.TaskExecutionDescriptor{
 		Task:   event.Task,
@@ -188,18 +188,19 @@ func (e *ApplicationScheduler) executeTask(event taskscheduler.TaskTriggeredEven
 
 	var errString *string
 	if err != nil {
-		logger.Error("failed to complete task",
-			zap.String("taskName", event.Task.Name),
-			zap.Stringer("taskID", event.Task.ID),
-			zap.Error(err),
-		)
+		logger.Error().
+			Str("taskName", event.Task.Name).
+			Str("task ID", event.Task.ID.String()).
+			Err(err).
+			Msg("failed to complete task")
 		errString = new(string)
 		*errString = err.Error()
 	} else {
-		logger.Debug("task completed",
-			zap.String("taskName", event.Task.Name),
-			zap.Stringer("taskID", event.Task.ID),
-		)
+		logger.Info().
+			Str("task name", event.Task.Name).
+			Str("task ID", event.Task.ID.String()).
+			Str("sequence ID", sequenceID).
+			Msg("task completed")
 	}
 	_, err = e.client.FinishSequence(sequenceID, telephonist.FinishSequenceRequest{
 		Error: errString,
@@ -216,10 +217,10 @@ func (e *ApplicationScheduler) onTasks(tasks []*telephonist.DefinedTask) {
 
 	for _, task := range newMap {
 		if !e.executor.CanExecute(task) {
-			logger.Debug("skipping task that cannot be executed by the executor",
-				zap.String("executor", reflect.TypeOf(e.executor).Elem().Name()),
-				zap.String("taskType", task.Body.Type),
-			)
+			logger.Debug().
+				Str("task type", task.Body.Type).
+				Str("executor", reflect.TypeOf(e.executor).Elem().Name()).
+				Msg("skipping task that cannot be executed by the executor")
 			continue
 		}
 		e.onTask(task)
@@ -243,9 +244,11 @@ func (e *ApplicationScheduler) onTask(task *telephonist.DefinedTask) {
 }
 
 func (e *ApplicationScheduler) onTaskRemoved(id uuid.UUID) {
-	delete(e.config.Value.Tasks, id)
-	e.config.Write()
-	logger.Info(fmt.Sprintf("removed task %s because it was reported as deleted by the backend", id.String()))
+	if task, exists := e.config.Value.Tasks[id]; exists {
+		logger.Info().Msgf("removed task %s (%s) because it was reported as deleted by the backend", task.Name, id.String())
+		delete(e.config.Value.Tasks, id)
+		e.config.Write()
+	}
 }
 
 type ExecutorConfig struct {

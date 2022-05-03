@@ -247,7 +247,7 @@ type IntroductionData struct {
 }
 
 type LogRecord struct {
-	Time     time.Time   `json:"t"`
+	Time     int64       `json:"t"`
 	Severity LogSeverity `json:"severity"`
 	Body     interface{} `json:"body"`
 }
@@ -259,8 +259,8 @@ type LogMessage struct {
 
 type CreateApplicationRequest struct {
 	Name        string   `json:"name"`
-	Description *string  `json:"description"`
-	DisplayName *string  `json:"display_name"`
+	Description string   `json:"description"`
+	DisplayName string   `json:"display_name"`
 	Tags        []string `json:"tags"`
 }
 

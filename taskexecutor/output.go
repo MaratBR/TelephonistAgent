@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/MaratBR/TelephonistAgent/logging"
 	"github.com/MaratBR/TelephonistAgent/telephonist"
 )
 
@@ -17,6 +18,16 @@ type outputBufferProxy struct {
 func (p *outputBufferProxy) Write(data []byte) (n int, err error) {
 	return p.buf.Write(data, p.isStderr)
 }
+
+type recordType byte
+
+const (
+	noRecord recordType = iota
+	stdoutRecord
+	stderrRecord
+)
+
+var logger = logging.ChildLogger("OutputBuffer")
 
 type OutputBuffer struct {
 	Stderr io.Writer
@@ -30,6 +41,9 @@ type OutputBuffer struct {
 	flushClose         chan struct{}
 	closedConfirmation chan struct{}
 	mut                sync.Mutex
+
+	currentRecordType recordType
+	recordDeadlineUs  int64
 }
 
 type LogFlushCallback func([]telephonist.LogRecord)
@@ -65,6 +79,7 @@ func (buf *OutputBuffer) Flush() {
 }
 
 func (buf *OutputBuffer) Start() {
+	logger.Debug().Msg("starting output buffer")
 	buf.lastFlush = time.Now()
 	buf.flushClose = make(chan struct{})
 	buf.closedConfirmation = make(chan struct{})
@@ -72,8 +87,10 @@ func (buf *OutputBuffer) Start() {
 }
 
 func (buf *OutputBuffer) Stop() {
+	logger.Debug().Msg("stopping output buffer...")
 	buf.flushClose <- struct{}{}
 	<-buf.closedConfirmation
+	logger.Debug().Msg("stopped output buffer")
 }
 
 func (buf *OutputBuffer) flushLoop() {
@@ -81,6 +98,7 @@ outer:
 	for {
 		select {
 		case <-buf.flushClose:
+			buf.FlushRecord()
 			buf.Flush()
 			buf.closedConfirmation <- struct{}{}
 			break outer
@@ -90,48 +108,66 @@ outer:
 	}
 }
 
-func (buf *OutputBuffer) Write(data []byte, isStderr bool) (int, error) {
-	length := len(data)
-	var w bytes.Buffer
-	var severity telephonist.LogSeverity
-	if isStderr {
-		w = buf.stderr
-		severity = telephonist.SEVERITY_ERROR
-	} else {
-		w = buf.stdout
-		severity = telephonist.SEVERITY_INFO
-	}
-	{
-		leftover := w.Len()
-		if leftover != 0 {
-			newData := make([]byte, w.Len()+len(data))
-			copy(newData, w.Bytes())
-			copy(newData[leftover:], data)
-			w.Reset()
-			data = newData
-		}
-	}
-
-	lines, remaining := getLines(data)
-	records := make([]telephonist.LogRecord, len(lines))
-
-	for i := 0; i < len(lines); i++ {
-		records[i].Severity = severity
-		records[i].Body = lines[i]
-		records[i].Time = time.Now().UTC()
+func (buf *OutputBuffer) FlushRecord() {
+	if buf.currentRecordType == noRecord {
+		return
 	}
 
 	buf.mut.Lock()
 	defer buf.mut.Unlock()
 
-	buf.records = append(buf.records, records...)
+	var (
+		severity telephonist.LogSeverity
+		w        *bytes.Buffer
+	)
 
-	if len(remaining) > 0 {
-		w.Write(remaining)
+	if buf.currentRecordType == stderrRecord {
+		w = &buf.stderr
+		severity = telephonist.SEVERITY_ERROR
+	} else if buf.currentRecordType == stdoutRecord {
+		w = &buf.stdout
+		severity = telephonist.SEVERITY_INFO
 	}
 
-	if buf.lastFlush.Add(buf.opts.FlushEvery).Before(time.Now()) {
-		buf.Flush()
+	b := make([]byte, w.Len())
+	w.Read(b)
+	buf.records = append(buf.records, telephonist.LogRecord{
+		Severity: severity,
+		Time:     time.Now().UnixMicro(),
+		Body:     string(b),
+	})
+	w.Reset()
+	buf.currentRecordType = noRecord
+}
+
+func (buf *OutputBuffer) Write(data []byte, isStderr bool) (int, error) {
+	if len(data) == 0 {
+		return 0, nil
+	}
+	length := len(data)
+	var (
+		w       *bytes.Buffer
+		recType recordType
+	)
+	if isStderr {
+		recType = stderrRecord
+		w = &buf.stderr
+	} else {
+		recType = stdoutRecord
+		w = &buf.stdout
+	}
+
+	if buf.currentRecordType == noRecord {
+		buf.recordDeadlineUs = time.Now().UnixMicro() + 20_000
+	} else if buf.currentRecordType != recType || time.Now().UnixMicro() > buf.recordDeadlineUs {
+		buf.FlushRecord()
+	}
+
+	buf.currentRecordType = recType
+	c, err := w.Write(data)
+	if err != nil {
+		// TODO panic?
+		return c, err
 	}
 
 	return length, nil

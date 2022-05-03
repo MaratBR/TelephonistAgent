@@ -1,13 +1,16 @@
-VERSION := 0.2.0
+VERSION := 0.3.0
 TAG := release
 OUTPUT_FILENAME := telephonist-agent
 OUTPUT_PATH := bin/release
-GHL := $(GOPATH)/bin/github-release
 GH_USER ?= maratbr
 GH_REPO ?= TelephonistAgent
 
-
 all: build
+
+init:
+	go get github.com/ChimeraCoder/gojson/gojson
+	go install github.com/ChimeraCoder/gojson/gojson
+	go mod download
 
 clean:
 	@rm -rf ./bin
@@ -33,8 +36,7 @@ install-service: build
 
 
 run: build-debug
-	sudo $(OUTPUT_PATH)/$(OUTPUT_FILENAME) -v 
-
+	sudo $(OUTPUT_PATH)/$(OUTPUT_FILENAME) -v
 test:
 	@go test 
 	@go test ./telephonist
@@ -51,17 +53,8 @@ chown-directories:
 	sudo chown -R $(USER) /etc/telephonist-agent
 
 github-release: build
-	cp $(OUTPUT_PATH)/$(OUTPUT_FILENAME) "$(OUTPUT_PATH)/$(OUTPUT_FILENAME)-$(VERSION)"
-	$(GHL) release \
-		--user $(GH_USER) \
-		--repo $(GH_REPO) \
-		--tag v$(VERSION) \
-		--name "Telephonist Agent v$(VERSION)" \
-		--description "Automatic release for version $(VERSION)"
-	sleep 1
-	$(GHL) upload \
-		--user $(GH_USER) \
-		--repo $(GH_REPO) \
-		--tag v$(VERSION) \
-		--name "$(OUTPUT_FILENAME)-$(VERSION)" \
-		--file "$(OUTPUT_PATH)/$(OUTPUT_FILENAME)-$(VERSION)"
+	gh release create v$(VERSION) --generate-notes '$(OUTPUT_PATH)/$(OUTPUT_FILENAME)#CLI app'
+
+chown-dirs: 
+	sudo chown -R marat /etc/telephonist-agent
+	sudo chmod 777 /etc/telephonist-agent

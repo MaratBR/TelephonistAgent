@@ -2,10 +2,10 @@ package taskexecutor
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"os/exec"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/MaratBR/TelephonistAgent/telephonist"
@@ -48,12 +48,6 @@ func (e *ShellExecutor) CanExecute(task *telephonist.DefinedTask) bool {
 }
 
 func (e *ShellExecutor) Execute(descriptor *TaskExecutionDescriptor) error {
-	defer func() {
-		if r := recover(); r != nil {
-			println(fmt.Sprintf("panic! %#v", r))
-		}
-	}()
-
 	if descriptor.Task.Body.Type != telephonist.TASK_TYPE_EXEC && descriptor.Task.Body.Type != telephonist.TASK_TYPE_SCRIPT {
 		panic("invali task type")
 	}
@@ -120,16 +114,22 @@ func (e *ShellExecutor) Execute(descriptor *TaskExecutionDescriptor) error {
 		return err
 	}
 
+	var wg sync.WaitGroup
+	wg.Add(2)
+
 	go func() {
 		io.Copy(output.Stdout, stdout)
+		wg.Done()
 	}()
 
 	go func() {
 		io.Copy(output.Stderr, stderr)
+		wg.Done()
 	}()
 
 	output.Start()
 	err = cmd.Run()
+	wg.Wait()
 	output.Stop()
 	return err
 }

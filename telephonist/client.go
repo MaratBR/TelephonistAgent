@@ -12,7 +12,6 @@ import (
 	"github.com/MaratBR/TelephonistAgent/logging"
 	"github.com/google/uuid"
 	"github.com/parnurzeal/gorequest"
-	"go.uber.org/zap"
 )
 
 var (
@@ -198,10 +197,10 @@ func (c *Client) Publish(event EventData) *CombinedError {
 	if err != nil {
 		return err
 	}
-	apiLogger.Debug("published event",
-		zap.String("event_name", event.Name),
-		zap.String("sequence_id", event.SequenceID),
-	)
+	apiLogger.Debug().
+		Str("event_name", event.Name).
+		Str("sequence_id", event.SequenceID).
+		Msg("published event")
 	return nil
 }
 

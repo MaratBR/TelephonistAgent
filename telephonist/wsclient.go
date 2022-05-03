@@ -15,12 +15,11 @@ import (
 	"github.com/MaratBR/TelephonistAgent/logging"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
+	"github.com/rs/zerolog"
 )
 
 var (
-	wsLogger = logging.ChildLogger("telephonist-ws")
+	wsLogger = logging.ChildLogger("ws")
 )
 
 const (
@@ -153,7 +152,7 @@ func (c *WSClient) connectWithTicket(ticket string) error {
 
 	var err error
 	u := c.getWebsocketURL("report", ticket)
-	wsLogger.Debug("connecting to the Telephonist server", zap.Stringer("url", u))
+	wsLogger.Info().Str("url", u.String()).Msg("connecting to the Telephonist server")
 
 	c.conn, _, err = websocket.DefaultDialer.Dial(u.String(), http.Header{
 		"User-Agent": []string{c.userAgent},
@@ -171,7 +170,7 @@ func (c *WSClient) runLoop() {
 	for c.state != StateStopped {
 		c.lastError = c.connect()
 		if c.lastError != nil {
-			wsLogger.Error("failed to connect to the server", zap.Error(c.lastError))
+			wsLogger.Error().Err(c.lastError).Msg("failed to connect to the server")
 		} else {
 			c.requireState(StatePreparing)
 			go c.readPump()
@@ -179,7 +178,7 @@ func (c *WSClient) runLoop() {
 		}
 
 		// TODO: make restarting optional
-		wsLogger.Warn(fmt.Sprintf("restarting in %s", restartTimeout.String()))
+		wsLogger.Warn().Msgf("restarting in %s", restartTimeout.String())
 		time.Sleep(restartTimeout)
 	}
 }
@@ -218,18 +217,19 @@ func (c *WSClient) requireState(expectedState ...ClientState) {
 			return
 		}
 	}
-	wsLogger.Fatal("invalid client state encountered",
-		zap.Array("expected", zapcore.ArrayMarshalerFunc(func(enc zapcore.ArrayEncoder) error {
-			for _, expected := range expectedState {
-				enc.AppendString(expected.String())
-			}
-			return nil
-		})),
-		zap.String("got", c.state.String()),
-	)
+	expectedArr := zerolog.Arr()
+	for _, expected := range expectedState {
+		expectedArr.Str(expected.String())
+	}
+
+	wsLogger.Fatal().
+		Str("got", c.state.String()).
+		Array("expected", expectedArr).
+		Msg("invalid client state encountered")
 }
 
 func (c *WSClient) setState(state ClientState) {
+	wsLogger.Debug().Msgf("state: %s -> %s", c.state, state)
 	c.state = state
 }
 
@@ -249,14 +249,14 @@ func (c *WSClient) getWebsocketURL(prefix, ticket string) *url.URL {
 	if prefix != "" && prefix[0] == '/' {
 		prefix = prefix[1:]
 	}
-	u.Path = "_ws/application/" + prefix
+	u.Path = "/api/application-v1/ws/" + prefix
 	u.RawQuery = "ticket=" + ticket
 	return u
 }
 
 func (c *WSClient) writePump() {
 	t := time.NewTicker(pingPeriod)
-	wsLogger.Debug("writePump: starting")
+	wsLogger.Debug().Msg("writePump: starting")
 
 	var msg oRawMessage
 	looping := true
@@ -266,7 +266,7 @@ func (c *WSClient) writePump() {
 		case msg, looping = <-c.sendMessages:
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if !looping {
-				wsLogger.Debug("sendMessages channel is closed")
+				wsLogger.Debug().Msg("sendMessages channel is closed")
 				break
 			}
 			w, err := c.conn.NextWriter(websocket.TextMessage)
@@ -280,13 +280,15 @@ func (c *WSClient) writePump() {
 			var mb []byte
 			mb, err = json.Marshal(&msg)
 			if err != nil {
-				wsLogger.Error("failed to marshal message")
+				wsLogger.Error().Err(err).Str("string message", string(mb)).Msg("failed to marshal message")
 				continue
 			}
 			_, err = w.Write(mb)
 			if err != nil {
-				wsLogger.Error("failed to write to socket", zap.String("error", err.Error()))
+				wsLogger.Error().Err(err).Msg("failed to write to socket")
 				looping = false
+			} else {
+				wsLogger.Debug().Str("string message", string(mb)).Msg("WS message")
 			}
 			w.Close()
 		case <-t.C:
@@ -302,7 +304,7 @@ func (c *WSClient) writePump() {
 
 func (c *WSClient) readPump() {
 	var rm iRawMesage
-	wsLogger.Debug("readPump: starting")
+	wsLogger.Debug().Msg("readPump: starting")
 	for {
 		err := c.readMessage(&rm)
 		if err != nil {
@@ -310,17 +312,18 @@ func (c *WSClient) readPump() {
 				continue
 			}
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				// we need to
-				wsLogger.Error("unexpectedly closed the connection", zap.Error(err))
+				wsLogger.Error().Err(err).Msg("unexpectedly closed the connection")
+				break
+			} else {
+				wsLogger.Error().Err(err).Msg("unexpected error encountered, will assume that connection is closed")
 			}
-			break
 		}
 		err = c.handleMessage(rm)
 		if err != nil {
-			wsLogger.Error("failed to handle the message",
-				zap.String("msg_type", rm.MessageType),
-				zap.Error(err),
-			)
+			wsLogger.Error().
+				Str("msg_type", rm.MessageType).
+				Err(err).
+				Msg("failed to handle the message")
 		}
 	}
 	c.onDisconnect()
@@ -333,7 +336,7 @@ func (c *WSClient) onDisconnect() {
 		c.conn.SetWriteDeadline(time.Now().Add(time.Millisecond * 100))
 		c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 		c.conn.Close()
-		wsLogger.Warn("connection closed")
+		wsLogger.Warn().Msg("connection closed")
 		c.setState(StateDisconnected)
 	}
 }
@@ -346,7 +349,12 @@ func (c *WSClient) readMessage(rm *iRawMesage) error {
 	if messageType != websocket.TextMessage {
 		return ErrInvalidWebsocketMessage
 	}
-	return json.Unmarshal(message, rm)
+	err = json.Unmarshal(message, rm)
+	if err != nil {
+		wsLogger.Error().Msg("received malformed message from the backend")
+		return ErrInvalidWebsocketMessage
+	}
+	return nil
 }
 
 // #endregion
@@ -354,7 +362,9 @@ func (c *WSClient) readMessage(rm *iRawMesage) error {
 // #region Handling messages
 
 func (c *WSClient) handleMessage(m iRawMesage) (err error) {
-	wsLogger.Debug(fmt.Sprintf("handling message \"%s\"", m.MessageType), zap.String("msg_type", m.MessageType))
+	wsLogger.Debug().
+		Str("msg_type", m.MessageType).
+		Msgf("handling message \"%s\"", m.MessageType)
 
 	switch m.MessageType {
 	case MI_ERROR:
@@ -427,24 +437,24 @@ func (c *WSClient) onGreetings() {
 
 func (c *WSClient) onIntroduction(d IntroductionData) {
 	if c.state != StatePreparing {
-		wsLogger.Warn("(BUG?) received \"introduction\" message from the server more than twice, this might indicate a bug on the server side or here, on the client")
+		wsLogger.Warn().Msg("(BUG?) received \"introduction\" message from the server more than twice, this might indicate a bug on the server side or here, on the client")
 		return
 	}
-	wsLogger.Debug("got introduction from the server",
-		zap.String("app_id", d.AppId),
-		zap.String("server_version", d.ServerVersion),
-	)
+	wsLogger.Debug().
+		Str("app_id", d.AppId).
+		Str("server_version", d.ServerVersion).
+		Msg("got introduction from the server")
 	c.setState(StateConnected)
 	osInfo, err := getOsInfo()
 	if err != nil {
-		wsLogger.Debug("failed to get os info", zap.Error(err))
+		wsLogger.Warn().Err(err).Msg("failed to get os info")
 	}
 	message := &HelloMessage{
 		Subscriptions:     []string{},
 		SupportedFeatures: []string{"settings:sync", "settings", "purpose:application_host"},
 		ClientName:        "Telephonist Agent",
 		PID:               os.Getpid(),
-		ClientVersion:     "0.1.0dev",
+		ClientVersion:     "0.3.0",
 		OS:                osInfo,
 		CompatibilityKey:  c.opts.CompatibilityKey,
 		InstanceID:        c.opts.InstanceID,
@@ -462,16 +472,16 @@ func (c *WSClient) onBoundToSequences(sequences []string) {
 }
 
 func (c *WSClient) onNewEvent(d Event) {
-	wsLogger.Debug("got new event",
-		zap.String("event_key", d.EventKey),
-		zap.String("app_id", d.AppID),
-	)
+	wsLogger.Debug().
+		Str("event_key", d.EventKey).
+		Str("app_id", d.AppID).
+		Msg("got new event")
 	if channels, exists := c.eventChannels[d.EventKey]; exists {
 		for id, ch := range channels {
 			select {
 			case ch <- d:
 			case <-time.After(time.Millisecond * 1500):
-				wsLogger.Error(fmt.Sprintf("failed to put event in a queue eventChannels[%s][%d] with 1500ms timeout", d.EventKey, id))
+				wsLogger.Warn().Msgf("failed to put event in a queue eventChannels[%s][%d] with 1500ms timeout", d.EventKey, id)
 			}
 		}
 	}
@@ -531,10 +541,11 @@ func (c *WSClient) removeEventChannel(eventName string, id uint32) {
 }
 
 func (c *WSClient) onServerError(d ErrorData) {
-	wsLogger.Warn("received an error from the server",
-		zap.String("error_type", d.ErrorType),
-		zap.String("exception", d.Exception),
-		zap.String("error", d.Error))
+	wsLogger.Warn().
+		Str("error_type", d.ErrorType).
+		Str("exception", d.Exception).
+		Str("error", d.Error).
+		Msg("received an error from the server")
 }
 
 // #endregion

@@ -3,17 +3,16 @@
 package logging
 
 import (
-	"fmt"
+	"time"
 
-	"go.uber.org/zap"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
+	"github.com/rs/zerolog/pkgerrors"
 )
 
 func init() {
-	var err error
-	cfg := zap.NewProductionConfig()
-	cfg.Level.SetLevel(zap.DebugLevel)
-	Root, err = cfg.Build()
-	if err != nil {
-		panic(fmt.Sprintf("failed to init logger: %s", err.Error()))
-	}
+	zerolog.SetGlobalLevel(zerolog.WarnLevel)
+	zerolog.TimeFieldFormat = time.RFC3339
+	zerolog.ErrorStackMarshaler = pkgerrors.MarshalStack
+	rootLogger = log.Logger
 }

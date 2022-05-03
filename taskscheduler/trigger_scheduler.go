@@ -11,7 +11,7 @@ import (
 	"github.com/MaratBR/TelephonistAgent/telephonist"
 	"github.com/fsnotify/fsnotify"
 	"github.com/go-co-op/gocron"
-	"go.uber.org/zap"
+	"github.com/rs/zerolog"
 )
 
 var (
@@ -51,14 +51,14 @@ type CronTriggersScheduler struct {
 	cronScheduler *gocron.Scheduler
 	callback      TriggerCallback
 	jobs          map[uint64]*gocron.Job
-	logger        *zap.Logger
+	logger        zerolog.Logger
 }
 
 func NewCronTriggersScheduler() *CronTriggersScheduler {
 	return &CronTriggersScheduler{
 		cronScheduler: gocron.NewScheduler(time.UTC),
 		jobs:          make(map[uint64]*gocron.Job),
-		logger:        logger.With(zap.String("struct", "CronTriggersScheduler")),
+		logger:        logger.With().Str("struct", "CronTriggersScheduler").Logger(),
 	}
 }
 
@@ -131,7 +131,7 @@ type FSTriggersScheduler struct {
 	watcher      *fsnotify.Watcher
 	pathTriggers map[string]map[uint64]*telephonist.TaskTrigger
 	triggers     map[uint64]*telephonist.TaskTrigger
-	logger       *zap.Logger
+	logger       zerolog.Logger
 
 	callback  TriggerCallback
 	isRunning bool
@@ -147,7 +147,7 @@ func NewFSTriggersScheduler() (*FSTriggersScheduler, error) {
 		watcher:      watcher,
 		pathTriggers: make(map[string]map[uint64]*telephonist.TaskTrigger),
 		triggers:     make(map[uint64]*telephonist.TaskTrigger),
-		logger:       logger.With(zap.String("struct", "FSTriggersScheduler")),
+		logger:       logger.With().Str("struct", "FSTriggersScheduler").Logger(),
 	}, nil
 }
 
@@ -181,7 +181,7 @@ func (e *FSTriggersScheduler) ScheduleByID(id uint64, trigger *telephonist.TaskT
 		if err != nil {
 			return 0, err
 		}
-		logger.Debug(fmt.Sprintf("watching: %s", path))
+		logger.Debug().Msgf("watching: %s", path)
 		e.pathTriggers[path] = map[uint64]*telephonist.TaskTrigger{id: trigger}
 	}
 	e.triggers[id] = trigger
@@ -248,10 +248,10 @@ func (e *FSTriggersScheduler) dispatchEvent(event fsnotify.Event) {
 	if err != nil {
 		return
 	}
-	logger.Debug(
-		"handling fs event",
-		zap.String("path", path),
-	)
+	logger.Debug().
+		Str("path", path).
+		Str("op", event.Op.String()).
+		Msg("handling fs event")
 
 	metaData := map[string]interface{}{
 		"FILEPATH":    path,
@@ -292,7 +292,7 @@ type TelephonistScheduler struct {
 	triggers              map[uint64]*telephonist.TaskTrigger
 	eventTriggers         map[string]map[uint64]*telephonist.TaskTrigger
 	callback              TriggerCallback
-	logger                *zap.Logger
+	logger                zerolog.Logger
 }
 
 func NewTelephonistScheduler(client *telephonist.WSClient) *TelephonistScheduler {
@@ -304,7 +304,7 @@ func NewTelephonistScheduler(client *telephonist.WSClient) *TelephonistScheduler
 		subscriptionsCounters: make(map[string]int),
 		eventTriggers:         make(map[string]map[uint64]*telephonist.TaskTrigger),
 		triggers:              make(map[uint64]*telephonist.TaskTrigger),
-		logger:                logger.With(zap.String("struct", "TelephonistScheduler")),
+		logger:                logger.With().Str("struct", "TelephonistScheduler").Logger(),
 	}
 }
 
@@ -423,7 +423,7 @@ type CompositeTriggersScheduler struct {
 	childSchedulers   []TriggersScheduler
 	executorIndexBits uint8
 	isRunning         bool
-	logger            *zap.Logger
+	logger            zerolog.Logger
 	ids               map[uint64]int
 }
 
@@ -431,7 +431,7 @@ func NewCompositeTriggersScheduler(executors ...TriggersScheduler) *CompositeTri
 	return &CompositeTriggersScheduler{
 		childSchedulers:   executors,
 		executorIndexBits: uint8(math.Ceil(math.Log2(float64(len(executors))))),
-		logger:            logger.With(zap.String("struct", "CompositeTriggersScheduler")),
+		logger:            logger.With().Str("struct", "CompositeTriggersScheduler").Logger(),
 		ids:               make(map[uint64]int),
 	}
 }
@@ -489,7 +489,7 @@ func (e *CompositeTriggersScheduler) ScheduleByID(id uint64, trigger *telephonis
 			return id, err
 		}
 	}
-	e.logger.Debug("invalid trigger type", zap.String("triggerType", trigger.Name))
+	e.logger.Debug().Str("trigger type", trigger.Name).Msg("invalid trigger type")
 	return 0, fmt.Errorf("there's no executors that match given trigger type %s", trigger.Name)
 }
 
@@ -504,7 +504,7 @@ func (e *CompositeTriggersScheduler) Schedule(trigger *telephonist.TaskTrigger) 
 			return id, err
 		}
 	}
-	e.logger.Debug("invalid trigger type", zap.String("triggerType", trigger.Name))
+	e.logger.Debug().Str("trigger type", trigger.Name).Msg("invalid trigger type")
 	return 0, fmt.Errorf("there's no executors that match given trigger type %s", trigger.Name)
 }
 
@@ -525,7 +525,9 @@ func (e *CompositeTriggersScheduler) Start() error {
 		err = e.childSchedulers[i].Start()
 	}
 	if err != nil {
-		e.logger.Error("Failed to start executore because one of the child executors failed to start")
+		e.logger.Error().
+			Err(err).
+			Msg("Failed to start executore because one of the child executors failed to start")
 		// stop already running executors
 		for j := 0; j <= i; j++ {
 			e.childSchedulers[i].Stop()

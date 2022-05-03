@@ -1,5 +1,6 @@
 {
-    "Name": "Name",
+    "Name": "Name (digits, latin letters and underscore \"_\" only)",
+    "AppDescription": "App description",
     "TryRunInit": "Try to run interactive initilization",
     "DisplayNameOrEmpty": "Display name (can be empty)",
     "Tags": "Tags (comma-separated)",

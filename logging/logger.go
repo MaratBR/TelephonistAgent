@@ -1,18 +1,19 @@
 package logging
 
-import "go.uber.org/zap"
-
-var (
-	loggers       map[string]*zap.Logger
-	Root          *zap.Logger
-	DoCompression bool = true
-	LogFile            = "/var/log/telephonist-agent/client.log"
+import (
+	"github.com/rs/zerolog"
 )
 
-func Name(name string) zap.Field {
-	return zap.String("loggerName", name)
+var (
+	baseLogger zerolog.Logger
+	rootLogger zerolog.Logger
+)
+
+func ChildLogger(name string) zerolog.Logger {
+	return rootLogger.With().Str("logger", name).Logger()
 }
 
-func ChildLogger(name string) *zap.Logger {
-	return Root.With(Name(name))
+func commonInit() {
+	zerolog.TimestampFieldName = "t"
+	zerolog.LevelFieldName = "l"
 }

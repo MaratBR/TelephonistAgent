@@ -1,9 +1,10 @@
 package locales
 
 type Messages struct {
-	APIURLIs      string `json:"ApiUrlIs"`
-	APIURLMissing string `json:"ApiUrlMissing"`
-	Cli           struct {
+	APIURLIs       string `json:"ApiUrlIs"`
+	APIURLMissing  string `json:"ApiUrlMissing"`
+	AppDescription string `json:"AppDescription"`
+	Cli            struct {
 		Actions struct {
 			Info          string `json:"Info"`
 			Init          string `json:"Init"`

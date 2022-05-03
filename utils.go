@@ -18,7 +18,7 @@ func contains[T comparable](arr []T, v T) bool {
 }
 
 func addToSet[T comparable](arr []T, v T) []T {
-	if contains[T](arr, v) {
+	if contains(arr, v) {
 		return arr
 	}
 	return append(arr, v)
@@ -56,8 +56,7 @@ func readString(title string) string {
 	if err != nil {
 		panic(err)
 	}
-	value = value[:len(value)-1]
-	return value
+	return strings.TrimSpace(value)
 }
 
 func readStringWithCondition(title string, condition func(string) bool) string {
@@ -70,7 +69,7 @@ func readStringWithCondition(title string, condition func(string) bool) string {
 		value, _ = reader.ReadString('\n')
 		valid = condition(value)
 	}
-	return value
+	return strings.TrimSpace(value)
 }
 
 func isNotEmptyString(s string) bool {

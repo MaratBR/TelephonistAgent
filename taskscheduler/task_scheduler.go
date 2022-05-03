@@ -7,7 +7,6 @@ import (
 	"github.com/MaratBR/TelephonistAgent/telephonist"
 	"github.com/MaratBR/TelephonistAgent/utils"
 	"github.com/google/uuid"
-	"go.uber.org/zap"
 )
 
 type TaskSchedulingError struct {
@@ -106,14 +105,20 @@ func (e *taskScheduler) Schedule(task *telephonist.DefinedTask) error {
 	if t, exists := e.tasks[task.ID]; exists {
 		t.DefinedTask = task
 		// update existing task
-		logger.Debug("updating the task", zap.String("taskId", task.ID.String()))
+		logger.Warn().
+			Str("task ID", task.ID.String()).
+			Str("task name", task.Name).
+			Msg("rescheduling the task")
 		newTriggers := make(map[uint64]*telephonist.TaskTrigger, len(task.Triggers))
 
 		// add or update new triggers
 		for _, newTrigger := range task.Triggers {
 			id, err := e.updateTrigger(task.ID, newTrigger)
 			if err != nil {
-				logger.Error(fmt.Sprintf("failed to update trigger %#v", newTrigger))
+				logger.Error().
+					Err(err).
+					Str("trigger", fmt.Sprintf("%#v", newTrigger)).
+					Msg("failed to update trigger")
 			} else {
 				newTriggers[id] = newTrigger
 			}
@@ -122,13 +127,11 @@ func (e *taskScheduler) Schedule(task *telephonist.DefinedTask) error {
 		// find old trigger and remove them
 		for id, oldTrigger := range t.ScheduledTriggers {
 			if _, exists := newTriggers[id]; !exists {
-				// remove old trigger
-				// TODO: do not ignore the error here
-				logger.Debug("removed the trigger",
-					zap.Uint64("triggerID", id),
-					zap.String("name", oldTrigger.Trigger.Name),
-					zap.String("body", string(oldTrigger.Trigger.Body)),
-				)
+				logger.Debug().
+					Uint64("trigger ID", id).
+					Str("name", oldTrigger.Trigger.Name).
+					Str("jsonBody", string(oldTrigger.Trigger.Body)).
+					Msg("removed the trigger")
 				e.removeTrigger(t.DefinedTask.ID, id)
 			}
 		}
@@ -138,23 +141,22 @@ func (e *taskScheduler) Schedule(task *telephonist.DefinedTask) error {
 			DefinedTask:       task,
 		}
 		if len(task.Triggers) == 0 {
-			logger.Warn(fmt.Sprintf("task %s has no triggers", task.Name))
+			logger.Warn().Str("task name", task.Name).Msg("task has no triggers")
 		} else {
-			logger.Debug("scheduling new task",
-				zap.String("name", task.Name),
-				zap.String("taskId", task.ID.String()),
-				zap.Int("triggersTotal", len(task.Triggers)),
-			)
+			logger.Warn().
+				Str("task name", task.Name).
+				Str("task ID", task.ID.String()).
+				Int("count of triggers", len(task.Triggers)).
+				Msg("scheduling new task")
 		}
 		for _, trigger := range task.Triggers {
 			_, err := e.updateTrigger(task.ID, trigger)
 			if err != nil {
-				logger.Error(
-					fmt.Sprintf("failed to update trigger %#v while scheduling task", trigger),
-					zap.String("taskName", task.Name),
-					zap.Stringer("taskID", task.ID),
-					zap.Error(err),
-				)
+				logger.Error().
+					Err(err).
+					Str("task ID", task.ID.String()).
+					Str("task name", task.Name).
+					Msg("failed to update trigger while scheduling task")
 			}
 		}
 	}

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -15,14 +16,14 @@ import (
 	"github.com/MaratBR/TelephonistAgent/logging"
 	"github.com/MaratBR/TelephonistAgent/telephonist"
 	"github.com/juju/fslock"
+	"github.com/rs/zerolog"
 	"github.com/urfave/cli/v2"
-	"go.uber.org/zap"
 )
 
 const (
 	APPLICATION_NAME     = "TelephonistAgent"
 	VERBOSE_F            = "verbose"
-	CONFIG_FOLDER_PATH_F = "rootPath"
+	CONFIG_FOLDER_PATH_F = "root-path"
 	CONFIG_PATH_F        = "config"
 	AGENT_CONFIG_PATH_F  = "agent-config"
 	SOCKET_F             = "socket"
@@ -30,7 +31,7 @@ const (
 
 var (
 	ErrApplicationKeyIsMissing = fmt.Errorf(
-		locales.M.KeyMissing+". "+locales.M.TryRunInit+"(%s init)", os.Args[0])
+		locales.M.KeyMissing+". "+locales.M.TryRunInit+" (%s init)", os.Args[0])
 	logger = logging.ChildLogger("app")
 )
 
@@ -52,7 +53,7 @@ type App struct {
 
 func fatalOnErr(err error) {
 	if err != nil {
-		logger.Fatal(err.Error())
+		logger.Fatal().Err(err).Msg("")
 	}
 }
 
@@ -136,9 +137,8 @@ func CreateNewApp() *App {
 
 func (a *App) before(c *cli.Context) error {
 	if c.Bool(VERBOSE_F) {
-
+		zerolog.SetGlobalLevel(zerolog.DebugLevel)
 	}
-
 	fatalOnErr(os.MkdirAll(c.String(CONFIG_FOLDER_PATH_F), os.ModePerm))
 	a.configFolderPath = c.String(CONFIG_FOLDER_PATH_F)
 	configPath := c.String(CONFIG_PATH_F)
@@ -157,7 +157,6 @@ func (a *App) after(c *cli.Context) error {
 			return err
 		}
 	}
-	logging.Root.Sync()
 	return nil
 }
 
@@ -167,31 +166,43 @@ func (a *App) refetchConfigAction(c *cli.Context) error {
 	return nil
 }
 
-func (a *App) startCRProcedure() {
+func isValidApplicationName(s string) bool {
+	if s == "" {
+		return false
+	}
+	matched, err := regexp.Match("[\\d\\w_]+", []byte(s))
+	if err != nil {
+		panic(err)
+	}
+	return matched
+}
+
+func (a *App) startCRProcedure() error {
 	u, err := url.Parse(a.appConfig.TelephonistAddress)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, locales.M.InvalidURL+"\n", a.appConfig.TelephonistAddress)
-		os.Exit(1)
+		return fmt.Errorf(locales.M.InvalidURL+"\n", a.appConfig.TelephonistAddress)
 	}
 	valid := false
-	name := readStringWithCondition(locales.M.Name, isNotEmptyString)
+	name := readStringWithCondition(locales.M.Name, isValidApplicationName)
 	displayName := readString(locales.M.DisplayNameOrEmpty)
+	description := readString(locales.M.AppDescription)
 	tags := readTags(locales.M.Tags)
 
 	client, err := telephonist.NewClient(telephonist.ClientOptions{URL: u})
 	if err != nil {
-		panic(err)
+		// fatal error: failed to create clienm
+		return err
 	}
 
 	var response telephonist.CodeRegistrationCompleted
 	for !valid {
 		fmt.Printf(locales.M.PleaseGoToCR+"\n", "/admin/applications/cr")
 		code := readString("CODE")
-		code = strings.Trim(code[:len(code)-1], " \t")
 		response, err = client.SubmitCodeRegistration(code, &telephonist.CreateApplicationRequest{
 			Name:        name,
-			DisplayName: &displayName,
+			DisplayName: displayName,
 			Tags:        tags,
+			Description: description,
 		})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err.Error())
@@ -199,12 +210,14 @@ func (a *App) startCRProcedure() {
 			valid = true
 			a.appConfig.ApplicationKey = response.Key
 			err = a.appConfigFile.Write(a.appConfig)
+			fmt.Printf(locales.M.KeyIs+"\n", response.Key)
+			// fatal error: failed to write config
 			if err != nil {
-				fmt.Fprintf(os.Stderr, locales.M.FailedToWriteConfig+"\n", err.Error())
-				fmt.Printf(locales.M.KeyIs+"\n", response.Key)
+				return fmt.Errorf(locales.M.FailedToWriteConfig+"\n", err.Error())
 			}
 		}
 	}
+	return nil
 }
 
 func (a *App) initAction(c *cli.Context) error {
@@ -280,7 +293,10 @@ func (a *App) initAction(c *cli.Context) error {
 
 		println(locales.M.WantCR)
 		if readYn() {
-			a.startCRProcedure()
+			err := a.startCRProcedure()
+			if err != nil {
+				panic(err)
+			}
 		} else {
 			var key string
 			for len(key) == 0 {
@@ -334,15 +350,13 @@ func (a *App) action(c *cli.Context) error {
 	)
 	err = a.appConfigFile.LoadOrCreate(a.appConfig)
 	if err != nil {
-		logger.Fatal("failed to load config file",
-			zap.String("error", err.Error()),
-			zap.String("file", a.appConfigFile.filepath),
-		)
+		logger.Fatal().
+			Err(err).
+			Str("config file", a.appConfigFile.filepath).
+			Msg("failed to load config file")
 	}
-	logger.Debug("config file located: "+a.appConfigFile.filepath,
-		zap.String("cfgPath", a.appConfigFile.filepath),
-	)
-	logger.Debug("api url = " + a.appConfig.TelephonistAddress)
+	logger.Warn().Str("config file", a.appConfigFile.filepath).Msg("config file located")
+	logger.Warn().Str("url", a.appConfig.TelephonistAddress).Msg("API URL")
 
 	err = a.prepareConfig()
 	if err != nil {
