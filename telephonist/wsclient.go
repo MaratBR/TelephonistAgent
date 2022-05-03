@@ -454,7 +454,7 @@ func (c *WSClient) onIntroduction(d IntroductionData) {
 		SupportedFeatures: []string{"settings:sync", "settings", "purpose:application_host"},
 		ClientName:        "Telephonist Agent",
 		PID:               os.Getpid(),
-		ClientVersion:     "0.3.0",
+		ClientVersion:     "0.3.1",
 		OS:                osInfo,
 		CompatibilityKey:  c.opts.CompatibilityKey,
 		InstanceID:        c.opts.InstanceID,

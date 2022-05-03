@@ -1,4 +1,4 @@
-VERSION := 0.3.0
+VERSION := 0.3.1
 TAG := release
 OUTPUT_FILENAME := telephonist-agent
 OUTPUT_PATH := bin/release

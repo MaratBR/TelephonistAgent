@@ -33,12 +33,19 @@ type ApplicationView struct {
 	// AreSettingsAllowed bool `json:"are_settings_allowed"`
 }
 
+type TriggeredBy struct {
+	TriggerType string
+	TriggerBody interface{}
+	Extra       map[string]interface{}
+}
+
 type CreateSequenceRequest struct {
 	CustomName   *string                `json:"custom_name"`
 	Description  *string                `json:"description"`
 	Meta         map[string]interface{} `json:"meta"`
 	TaskID       uuid.UUID              `json:"task_id"`
 	ConnectionID uuid.UUID              `json:"connection_id"`
+	TriggeredBy  *TriggeredBy           `json:"triggered_by"`
 }
 
 const (

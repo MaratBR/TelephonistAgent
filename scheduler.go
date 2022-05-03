@@ -152,6 +152,11 @@ func (e *ApplicationScheduler) executeTask(event taskscheduler.TaskTriggeredEven
 			Description:  nil,
 			Meta:         map[string]interface{}{},
 			ConnectionID: e.wsc.ConnectionID,
+			TriggeredBy: &telephonist.TriggeredBy{
+				TriggerType: event.TriggerEvent.Trigger.Name,
+				TriggerBody: event.TriggerEvent.Trigger.Body,
+				Extra:       event.TriggerEvent.Params,
+			},
 		})
 		if err != nil {
 			return err

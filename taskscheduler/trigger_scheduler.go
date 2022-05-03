@@ -387,7 +387,9 @@ func (e *TelephonistScheduler) drain() {
 				continue
 			}
 			for id, trigger := range triggers {
-				e.callback(&TriggeredEvent{TriggerID: id, Trigger: trigger})
+				e.callback(&TriggeredEvent{TriggerID: id, Trigger: trigger, Params: map[string]interface{}{
+					"EVENT_ID": event.ID,
+				}})
 			}
 		}
 	}
