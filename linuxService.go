@@ -21,10 +21,8 @@ After=syslog.target
 
 [Service]
 ExecStart=/usr/local/bin/telephonist-agent
-RestartSec=30
-
-# User=telephonist
-Group=telephonist
+RestartSec=20
+Restart=always
 
 [Install]
 WantedBy=multi-user.target
