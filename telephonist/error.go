@@ -41,10 +41,16 @@ func MustExtractCombined(err error) []error {
 }
 
 type UnexpectedStatusCode struct {
-	Status     int
-	StatusText string
+	Status       int
+	StatusText   string
+	ResponseBody string
 }
 
 func (err *UnexpectedStatusCode) Error() string {
-	return "Unexpected status code: " + err.StatusText
+	var sb strings.Builder
+	sb.WriteString("Unexpected status code: ")
+	sb.WriteString(err.StatusText)
+	sb.WriteString(", response body: ")
+	sb.WriteString(err.ResponseBody)
+	return sb.String()
 }

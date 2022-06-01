@@ -1,0 +1,6 @@
+make --dry-run --always-make --keep-going --print-directory
+make: Entering directory '/home/marat/Projects/TelephonistAgent'
+go generate ./locales
+go build -o bin/release/telephonist-agent -tags release		
+make: Leaving directory '/home/marat/Projects/TelephonistAgent'
+ 

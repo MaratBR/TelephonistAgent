@@ -11,9 +11,7 @@
             "request": "launch",
             "program": ".",
             "buildFlags": "-tags debug",
-            "args": ["-v"],
-            "console": "integratedTerminal"
-
+            "args": ["-V"]
         }
     ]
 }

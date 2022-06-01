@@ -29,12 +29,6 @@ WantedBy=multi-user.target
 `
 )
 
-var allFolders = []string{
-	"/etc/telephonist-agent",
-	"/var/log/telephonist-agent",
-	"/var/telephonist-agent",
-}
-
 func isServiceFileExists() (bool, error) {
 	_, err := os.Stat(serviceFile)
 	if os.IsNotExist(err) {

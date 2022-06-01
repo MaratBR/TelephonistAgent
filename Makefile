@@ -1,4 +1,4 @@
-VERSION := 0.3.1
+VERSION := 0.3.3
 TAG := release
 OUTPUT_FILENAME := telephonist-agent
 OUTPUT_PATH := bin/release
@@ -11,6 +11,8 @@ init:
 	go get github.com/ChimeraCoder/gojson/gojson
 	go install github.com/ChimeraCoder/gojson/gojson
 	go mod download
+	go install github.com/volatiletech/sqlboiler/v4@latest
+	go install github.com/volatiletech/sqlboiler/v4/drivers/sqlboiler-sqlite3
 
 clean:
 	@rm -rf ./bin
@@ -58,3 +60,9 @@ github-release: build
 chown-dirs: 
 	sudo chown -R marat /etc/telephonist-agent
 	sudo chmod 777 /etc/telephonist-agent
+
+database:
+	rm -f ./test_database.sqlite3
+	sqlite3 test_database.sqlite3 <./db/schema.sql
+	reform-db -db-driver=sqlite3 -db-source=test_database.sqlite3 init db
+	reform db

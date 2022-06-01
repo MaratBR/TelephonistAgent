@@ -425,7 +425,7 @@ func (c *WSClient) onGreetings() {
 	}
 	messages := make([]string, len(c.eventChannels))
 	i := 0
-	for event, _ := range c.eventChannels {
+	for event := range c.eventChannels {
 		messages[i] = event
 		i += 1
 	}
@@ -454,7 +454,7 @@ func (c *WSClient) onIntroduction(d IntroductionData) {
 		SupportedFeatures: []string{"settings:sync", "settings", "purpose:application_host"},
 		ClientName:        "Telephonist Agent",
 		PID:               os.Getpid(),
-		ClientVersion:     "0.3.1",
+		ClientVersion:     "0.3.3",
 		OS:                osInfo,
 		CompatibilityKey:  c.opts.CompatibilityKey,
 		InstanceID:        c.opts.InstanceID,

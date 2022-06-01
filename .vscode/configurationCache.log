@@ -1,0 +1,1 @@
+{"buildTargets":["__set_debug","all","build","build-debug","chown-directories","chown-dirs","clean","database","generate","github-release","init","install-service","rebuild","run","test"],"launchTargets":[],"customConfigurationProvider":{"workspaceBrowse":{"browsePath":[],"compilerArgs":[]},"fileIndex":[]}}

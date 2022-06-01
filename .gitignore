@@ -1,4 +1,4 @@
-testing_area/*
+testing_area/
 !testing_area/.gitkeep
 bin/
-__debug_bin/
+__debug_bin

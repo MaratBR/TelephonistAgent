@@ -1,8 +1,14 @@
 package db
 
-import "github.com/google/uuid"
+import (
+	"github.com/MaratBR/TelephonistAgent/telephonist"
+	"github.com/google/uuid"
+)
 
-type SequenceState struct {
-	TaskID       uuid.UUID
-	IsInProgress bool
+type SequenceDBRecord struct {
+	TaskID    uuid.UUID
+	TaskName  string
+	State     telephonist.SequenceState
+	OnlyLocal bool
+	BackendID string
 }

@@ -34,9 +34,9 @@ type ApplicationView struct {
 }
 
 type TriggeredBy struct {
-	TriggerType string
-	TriggerBody interface{}
-	Extra       map[string]interface{}
+	TriggerType string                 `json:"trigger_type"`
+	TriggerBody interface{}            `json:"trigger_body"`
+	Extra       map[string]interface{} `json:"extra"`
 }
 
 type CreateSequenceRequest struct {
@@ -275,3 +275,13 @@ type CodeRegistrationCompleted struct {
 	Key string `json:"key"`
 	ID  string `json:"_id"`
 }
+
+type SequenceState string
+
+const (
+	SEQUENCE_IN_PROGRESS = "in_progress"
+	SEQUENCE_FAILED      = "failed"
+	SEQUENCE_SUCCEEDED   = "succeeded"
+	SEQUENCE_FROZEN      = "frozen"
+	SEQUENCE_ABANDONED   = "abandoned"
+)

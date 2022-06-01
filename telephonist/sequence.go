@@ -10,11 +10,11 @@ type EventDataWithoutSequence struct {
 	Data interface{}
 }
 
-func (s *Sequence) Publish(d EventDataWithoutSequence) *CombinedError {
+func (s *Sequence) Publish(d EventDataWithoutSequence) error {
 	return s.c.Publish(EventData{Name: d.Name, Data: d.Data, SequenceID: s.id})
 }
 
-func (s *Sequence) Finish(d FinishSequenceRequest) *CombinedError {
+func (s *Sequence) Finish(d FinishSequenceRequest) error {
 	_, err := s.c.FinishSequence(s.id, d)
 	return err
 }

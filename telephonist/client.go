@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"net/url"
 	"path"
 	"reflect"
@@ -84,7 +85,7 @@ func NewClient(options ClientOptions) (*Client, error) {
 
 // #region Initialization and utils
 
-func (c *Client) httpPost(relativeURL string, data interface{}, response interface{}) (gorequest.Response, *CombinedError) {
+func (c *Client) httpPost(relativeURL string, data interface{}, response interface{}) (gorequest.Response, error) {
 	if data != nil {
 		typ := reflect.TypeOf(data)
 
@@ -111,15 +112,20 @@ func (c *Client) httpPost(relativeURL string, data interface{}, response interfa
 		resp, _, errs = req.EndStruct(response)
 	}
 	if len(errs) != 0 {
-		if resp != nil && resp.StatusCode >= 300 {
-			return resp, &CombinedError{Errors: []error{&UnexpectedStatusCode{Status: resp.StatusCode, StatusText: resp.Status}}}
-		}
 		return resp, &CombinedError{Errors: errs}
+	}
+	if resp != nil && resp.StatusCode >= 300 {
+		var text string
+		responseData, err := ioutil.ReadAll(resp.Body)
+		if err == nil {
+			text = string(responseData)
+		}
+		return resp, &CombinedError{Errors: []error{&UnexpectedStatusCode{ResponseBody: text, Status: resp.StatusCode, StatusText: resp.Status}}}
 	}
 	return resp, nil
 }
 
-func (c *Client) delete(path string) *CombinedError {
+func (c *Client) delete(path string) error {
 	resp, _, err := gorequest.New().
 		Delete(c.getUrl(path).String()).
 		Set(_AUTHORIZATION, "Bearer "+c.opts.APIKey).
@@ -192,7 +198,7 @@ func (c *Client) SubmitCodeRegistration(code string, createApplication *CreateAp
 	return d, nil
 }
 
-func (c *Client) Publish(event EventData) *CombinedError {
+func (c *Client) Publish(event EventData) error {
 	_, err := c.httpPost("events/publish", event, nil)
 	if err != nil {
 		return err
@@ -204,7 +210,7 @@ func (c *Client) Publish(event EventData) *CombinedError {
 	return nil
 }
 
-func (c Client) UpdateSequencMeta(SequenceID string, meta map[string]interface{}) *CombinedError {
+func (c Client) UpdateSequencMeta(SequenceID string, meta map[string]interface{}) error {
 	resp, err := c.httpPost("sequences/"+SequenceID+"/meta", meta, nil)
 	if err != nil {
 		return err
@@ -215,7 +221,7 @@ func (c Client) UpdateSequencMeta(SequenceID string, meta map[string]interface{}
 	return nil
 }
 
-func (c *Client) CreateSequence(data CreateSequenceRequest) (*IDResponse, *CombinedError) {
+func (c *Client) CreateSequence(data CreateSequenceRequest) (*IDResponse, error) {
 	resp := new(IDResponse)
 	_, err := c.httpPost("sequences", data, resp)
 	if err != nil {
@@ -224,7 +230,7 @@ func (c *Client) CreateSequence(data CreateSequenceRequest) (*IDResponse, *Combi
 	return resp, nil
 }
 
-func (c *Client) FinishSequence(SequenceID string, body FinishSequenceRequest) (*DetailResponse, *CombinedError) {
+func (c *Client) FinishSequence(SequenceID string, body FinishSequenceRequest) (*DetailResponse, error) {
 	resp := new(DetailResponse)
 	_, _, errs := gorequest.New().
 		Post(c.getUrl("sequences/"+SequenceID+"/finish").String()).
@@ -237,12 +243,12 @@ func (c *Client) FinishSequence(SequenceID string, body FinishSequenceRequest) (
 	return resp, nil
 }
 
-func (c Client) DefineTask(r DefineTaskRequest) *CombinedError {
+func (c Client) DefineTask(r DefineTaskRequest) error {
 	_, err := c.httpPost("defined-tasks", r, nil)
 	return err
 }
 
-func (c Client) DropTask(taskID uuid.UUID) *CombinedError {
+func (c Client) DropTask(taskID uuid.UUID) error {
 	return c.delete("defined-tasks/" + taskID.String())
 }
 
@@ -255,7 +261,7 @@ func (c Client) GetTasks() ([]TaskView, error) {
 	return tasks, nil
 }
 
-func (c *Client) CheckTaskNamesArray(names []string) (*TakenTasks, *CombinedError) {
+func (c *Client) CheckTaskNamesArray(names []string) (*TakenTasks, error) {
 	resp := new(TakenTasks)
 	_, err := c.httpPost("defined-tasks/check", names, resp)
 	if err != nil {
@@ -264,7 +270,7 @@ func (c *Client) CheckTaskNamesArray(names []string) (*TakenTasks, *CombinedErro
 	return resp, nil
 }
 
-func (c Client) LogThroughAPI(entry LogEntry) *CombinedError {
+func (c Client) LogThroughAPI(entry LogEntry) error {
 	_, err := c.httpPost("logs/add", entry, nil)
 	return err
 }

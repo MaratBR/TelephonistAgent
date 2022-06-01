@@ -63,6 +63,7 @@ func CreateNewApp() *App {
 			TelephonistAddress: "https://localhost:5789",
 		},
 	}
+	app.Version = "0.3.3"
 	app.Before = app.before
 	app.Name = APPLICATION_NAME
 	app.Usage = "Supervise multiple tasks and report all information to the Telephonist server"
@@ -94,7 +95,7 @@ func CreateNewApp() *App {
 		},
 		&cli.BoolFlag{
 			Name:    VERBOSE_F,
-			Aliases: []string{"v"},
+			Aliases: []string{"V"},
 			Value:   false,
 			Usage:   "if set, outputs debug messages",
 		},

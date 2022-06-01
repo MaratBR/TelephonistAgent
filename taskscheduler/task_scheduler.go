@@ -94,7 +94,7 @@ func (e *taskScheduler) Explain() TaskSchedulerInfo {
 
 func (e *taskScheduler) UnscheduleTask(taskID uuid.UUID) {
 	if t, exists := e.tasks[taskID]; exists {
-		for id, _ := range t.ScheduledTriggers {
+		for id := range t.ScheduledTriggers {
 			e.removeTrigger(taskID, id)
 		}
 		delete(e.tasks, taskID)
@@ -199,7 +199,7 @@ func (e *taskScheduler) updateTrigger(taskID uuid.UUID, trigger *telephonist.Tas
 func (e *taskScheduler) Unschedule(id uuid.UUID) (bool, error) {
 	if st, exists := e.tasks[id]; exists {
 		// TODO: do not ignore the error here
-		for id, _ := range st.ScheduledTriggers {
+		for id := range st.ScheduledTriggers {
 			e.triggersScheduler.Unschedule(id)
 		}
 		delete(e.tasks, id)

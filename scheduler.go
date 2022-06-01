@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"reflect"
 
+	"github.com/MaratBR/TelephonistAgent/db"
 	"github.com/MaratBR/TelephonistAgent/taskexecutor"
 	"github.com/MaratBR/TelephonistAgent/taskscheduler"
 	"github.com/MaratBR/TelephonistAgent/telephonist"
@@ -21,11 +22,13 @@ type ApplicationScheduler struct {
 	configPath    string
 	triggerEvents chan taskscheduler.TaskTriggeredEvent
 	InstanceID    uuid.UUID
+	db            *db.DB
 }
 
 type ApplicationSchedulerOptions struct {
 	ConfigPath string
 	Client     *telephonist.Client
+	DB         *db.DB
 }
 
 func NewApplicationScheduler(options ApplicationSchedulerOptions) (*ApplicationScheduler, error) {
@@ -35,6 +38,7 @@ func NewApplicationScheduler(options ApplicationSchedulerOptions) (*ApplicationS
 		client:        options.Client,
 		executor:      taskexecutor.NewShellExecutor(),
 		triggerEvents: make(chan taskscheduler.TaskTriggeredEvent),
+		db:            options.DB,
 	}
 	e.InstanceID = e.getOrSetInstanceID()
 	return e, nil
@@ -146,6 +150,8 @@ func (e *ApplicationScheduler) executeTask(event taskscheduler.TaskTriggeredEven
 	// start new sequence and create params
 	var sequenceID string
 
+	internalSequenceID := uuid.New().String()
+
 	{
 		seq, err := e.client.CreateSequence(telephonist.CreateSequenceRequest{
 			TaskID:       event.Task.ID,
@@ -159,8 +165,22 @@ func (e *ApplicationScheduler) executeTask(event taskscheduler.TaskTriggeredEven
 			},
 		})
 		if err != nil {
-			return err
+			logger.Error().Msg("Failed to create sequence on the backend: " + err.Error())
 		}
+		if e.db != nil {
+			var backendID string
+			if seq != nil {
+				backendID = seq.ID
+			}
+			e.db.PutSequence(internalSequenceID, db.SequenceDBRecord{
+				TaskID:    event.Task.ID,
+				TaskName:  event.Task.Name,
+				BackendID: backendID,
+				State:     telephonist.SEQUENCE_IN_PROGRESS,
+				OnlyLocal: err != nil,
+			})
+		}
+
 		sequenceID = seq.ID
 	}
 
